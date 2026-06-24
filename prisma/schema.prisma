@@ -1,0 +1,406 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ─── DATABASE ────────────────────────────────────────────────────────────────
+// Local dev  : provider = "sqlite",       DATABASE_URL="file:./dev.db"
+// Production : provider = "postgresql",   DATABASE_URL="postgresql://..."
+//
+// To switch: change `provider` below, then run `npx prisma db push`.
+// See docs/DEPLOY.md for the full Vercel + Neon/Supabase guide.
+// ─────────────────────────────────────────────────────────────────────────────
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  passwordHash   String
+  displayName    String
+  emailVerified  DateTime?
+  level          Int       @default(1)
+  referralCode   String    @unique @default(cuid())
+  referredById   String?
+  referredBy     User?     @relation("Referrals", fields: [referredById], references: [id])
+  referrals      User[]    @relation("Referrals")
+  walletAddress  String?
+  withdrawWalletAddress String?
+  role           String    @default("user")
+  frozen         Boolean   @default(false)
+  isCreator      Boolean   @default(false)
+  preferredChain String    @default("sepolia")
+  totpSecret     String?
+  totpEnabled    Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  sessions            Session[]
+  verificationTokens  VerificationToken[]
+  ownedNfts           Nft[]               @relation("Owner")
+  ordersAsBuyer       Order[]             @relation("Buyer")
+  ordersAsSeller      Order[]             @relation("Seller")
+  reservations        Reservation[]
+  earnings            Earning[]
+  walletTransactions  WalletTransaction[]
+  airdropClaims       AirdropClaim[]
+  tokenStakes         TokenStake[]
+  auctionsAsSeller    Auction[]           @relation("AuctionSeller")
+  highestBidAuctions  Auction[]           @relation("AuctionHighestBidder")
+  bids                Bid[]
+  offersAsBuyer       Offer[]             @relation("OfferBuyer")
+  notifications       Notification[]
+  createdCollections  Collection[]        @relation("CollectionCreator")
+  apiKeys             ApiKey[]
+  webhooks            Webhook[]
+  governanceProposals GovernanceProposal[]
+  governanceVotes     GovernanceVote[]
+  bridgeIntents       BridgeIntent[]
+  kycProfile          KycProfile?
+  auditLogs           AuditLog[]          @relation("AuditActor")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model VerificationToken {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  type      String   @default("email_verify")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Collection {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String?
+  imageUrl    String?
+  floorPrice  Float    @default(0)
+  royaltyBps  Int      @default(0)
+  creatorId   String?
+  creator     User?    @relation("CollectionCreator", fields: [creatorId], references: [id])
+  createdAt   DateTime @default(now())
+  nfts        Nft[]
+}
+
+model Nft {
+  id           String     @id @default(cuid())
+  tokenId      String
+  name         String
+  description  String?
+  imageUrl     String
+  rarity       String     @default("common")
+  collectionId String
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  ownerId      String?
+  owner        User?      @relation("Owner", fields: [ownerId], references: [id])
+  status       String     @default("available")
+  chainTokenId   String?
+  chainListingId String?
+  createdAt    DateTime   @default(now())
+  listing      Listing?
+  orders       Order[]
+  reservation  Reservation?
+  auction      Auction?
+  offers       Offer[]
+
+  @@unique([collectionId, tokenId])
+}
+
+model Reservation {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nftId      String   @unique
+  nft        Nft      @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  reservedAt DateTime @default(now())
+  dayKey     String
+
+  @@index([userId, dayKey])
+}
+
+model Listing {
+  id        String   @id @default(cuid())
+  nftId     String   @unique
+  nft       Nft      @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  sellerId  String
+  price     Float
+  currency  String   @default("USDT")
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Order {
+  id        String   @id @default(cuid())
+  nftId     String
+  nft       Nft      @relation(fields: [nftId], references: [id])
+  buyerId   String
+  buyer     User     @relation("Buyer", fields: [buyerId], references: [id])
+  sellerId  String
+  seller    User     @relation("Seller", fields: [sellerId], references: [id])
+  price           Float
+  currency        String   @default("USDT")
+  paymentMethod   String   @default("balance")
+  txHash          String?  @unique
+  status          String   @default("completed")
+  createdAt DateTime @default(now())
+  earnings  Earning[]
+}
+
+model Earning {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId     String?
+  order       Order?   @relation(fields: [orderId], references: [id])
+  type        String
+  amount      Float
+  currency    String   @default("USDT")
+  description String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model WalletTransaction {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type         String
+  amount       Float
+  currency     String   @default("USDT")
+  balanceAfter Float
+  status       String   @default("completed")
+  description  String?
+  orderId      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([userId, currency])
+}
+
+model AirdropCampaign {
+  id                    String         @id @default(cuid())
+  slug                  String         @unique
+  name                  String
+  description           String?
+  tokenAmount           Float
+  currency              String         @default("USDT")
+  minLevel              Int            @default(1)
+  requiresEmailVerified Boolean        @default(true)
+  maxClaims             Int?
+  startsAt              DateTime
+  endsAt                DateTime?
+  active                Boolean        @default(true)
+  createdAt             DateTime       @default(now())
+  claims                AirdropClaim[]
+}
+
+model TokenStake {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount     Float
+  status     String    @default("active")
+  stakedAt   DateTime  @default(now())
+  unstakedAt DateTime?
+
+  @@index([userId, status])
+}
+
+model AirdropClaim {
+  id         String          @id @default(cuid())
+  campaignId String
+  campaign   AirdropCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount     Float
+  currency   String          @default("USDT")
+  claimedAt  DateTime        @default(now())
+
+  @@unique([campaignId, userId])
+  @@index([userId])
+}
+
+model Auction {
+  id              String    @id @default(cuid())
+  nftId           String    @unique
+  nft             Nft       @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  sellerId        String
+  seller          User      @relation("AuctionSeller", fields: [sellerId], references: [id])
+  startPrice      Float
+  reservePrice    Float?
+  highestBid      Float?
+  highestBidderId String?
+  highestBidder   User?     @relation("AuctionHighestBidder", fields: [highestBidderId], references: [id])
+  currency        String    @default("USDT")
+  status          String    @default("active")
+  endAt           DateTime
+  createdAt       DateTime  @default(now())
+  bids            Bid[]
+
+  @@index([status, endAt])
+}
+
+model Bid {
+  id        String   @id @default(cuid())
+  auctionId String
+  auction   Auction  @relation(fields: [auctionId], references: [id], onDelete: Cascade)
+  bidderId  String
+  bidder    User     @relation(fields: [bidderId], references: [id])
+  amount    Float
+  createdAt DateTime @default(now())
+
+  @@index([auctionId, amount])
+}
+
+model Offer {
+  id        String   @id @default(cuid())
+  nftId     String
+  nft       Nft      @relation(fields: [nftId], references: [id], onDelete: Cascade)
+  buyerId   String
+  buyer     User     @relation("OfferBuyer", fields: [buyerId], references: [id])
+  amount    Float
+  currency  String   @default("USDT")
+  expiresAt DateTime
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+
+  @@index([nftId, status])
+  @@index([buyerId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  body      String
+  read      Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
+
+model ApiKey {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  keyHash   String    @unique
+  keyPrefix String
+  name      String
+  lastUsed  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Webhook {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  url       String
+  secret    String
+  events    String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+model GovernanceProposal {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  creatorId   String
+  creator     User     @relation(fields: [creatorId], references: [id])
+  status      String   @default("active")
+  endsAt      DateTime
+  createdAt   DateTime @default(now())
+  votes       GovernanceVote[]
+
+  @@index([status, endsAt])
+}
+
+model GovernanceVote {
+  id         String             @id @default(cuid())
+  proposalId String
+  proposal   GovernanceProposal @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  choice     String
+  weight     Float
+  createdAt  DateTime           @default(now())
+
+  @@unique([proposalId, userId])
+}
+
+model BridgeIntent {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromChain String
+  toChain   String
+  token     String
+  amount    Float
+  status    String   @default("pending")
+  txHash    String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model KycProfile {
+  id          String    @id @default(cuid())
+  userId      String    @unique
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tier        Int       @default(0)
+  status      String    @default("none")
+  legalName   String?
+  country     String?
+  submittedAt DateTime?
+  reviewedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Tenant {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  tagline   String?
+  logoUrl   String?
+  accentHex String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation("AuditActor", fields: [actorId], references: [id])
+  action     String
+  targetType String?
+  targetId   String?
+  detail     String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId])
+}
