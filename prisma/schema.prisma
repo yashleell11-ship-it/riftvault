@@ -10,7 +10,7 @@ generator client {
 // See docs/DEPLOY.md for the full Vercel + Neon/Supabase guide.
 // ─────────────────────────────────────────────────────────────────────────────
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
