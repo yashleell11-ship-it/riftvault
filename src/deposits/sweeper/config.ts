@@ -44,6 +44,12 @@ export function getMinBnbRefundWei(): bigint {
   return 10_000_000_000_000n; // 0.00001 BNB
 }
 
+/** Max deposits processed per admin manual run. */
+export function getAdminSweepBatchLimit(): number {
+  const n = Number(process.env.SWEEPER_ADMIN_BATCH_LIMIT ?? 20);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+}
+
 /** Max BNB funding txs per sweep (top-ups until balance is enough). */
 export function getMaxGasFundingTxs(): number {
   const n = Number(process.env.SWEEPER_MAX_GAS_FUNDING_TXS ?? 5);

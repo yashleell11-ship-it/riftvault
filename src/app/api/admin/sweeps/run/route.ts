@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { runSweeperTick } from "@/deposits/sweeper/runner";
+import { getAdminSweepBatchLimit } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
@@ -14,7 +15,7 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
-/** Run sweeper tick immediately (admin). Processes one deposit per request (UI loops for queue drain). */
+/** Run sweeper tick immediately (admin). Batch-funds all addresses then processes up to SWEEPER_ADMIN_BATCH_LIMIT deposits. */
 export async function POST(request: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -24,9 +25,13 @@ export async function POST(request: Request) {
   try {
     const diagnostics = await getSweeperDiagnostics();
     const { searchParams } = new URL(request.url);
-    const limitParam = Number(searchParams.get("limit") ?? "1");
-    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 1) : 1;
-    const result = await runSweeperTick({ limit, includeDiagnostics: true });
+    const maxLimit = getAdminSweepBatchLimit();
+    const limitParam = Number(searchParams.get("limit") ?? String(maxLimit));
+    const limit =
+      Number.isFinite(limitParam) && limitParam > 0
+        ? Math.min(Math.floor(limitParam), maxLimit)
+        : maxLimit;
+    const result = await runSweeperTick({ limit, includeDiagnostics: true, batchFund: true });
 
     return NextResponse.json({
       ok: diagnostics.enabled && result.errors.length === 0,
@@ -35,6 +40,7 @@ export async function POST(request: Request) {
       gasFunded: result.gasFunded,
       swept: result.swept,
       refunded: result.refunded,
+      batchAddressesFunded: result.batchAddressesFunded ?? 0,
       durationMs: result.durationMs,
       results: result.results,
       errors: result.errors,

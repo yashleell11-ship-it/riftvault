@@ -51,6 +51,7 @@ type RunResult = {
   completed?: number;
   failed?: number;
   processed?: number;
+  batchAddressesFunded?: number;
 };
 
 type Deposit = {
@@ -85,15 +86,18 @@ function truncateHash(hash: string | null, len = 12) {
   return `${hash.slice(0, len)}…${hash.slice(-6)}`;
 }
 
-function statusBadge(status: string | null) {
-  if (!status || status === "pending") {
-    return <Badge variant="default">Pending</Badge>;
-  }
+function statusBadge(status: string | null, sweptAt: string | null, sweepTxHash: string | null) {
   if (status === "completed") {
     return <Badge variant="accent">Completed</Badge>;
   }
   if (status === "failed") {
     return <Badge variant="danger">Failed</Badge>;
+  }
+  if (sweepTxHash && sweptAt) {
+    return <Badge variant="accent">Swept (finishing)</Badge>;
+  }
+  if (!status || status === "pending") {
+    return <Badge variant="default">Pending</Badge>;
   }
   return <Badge variant="default">{status}</Badge>;
 }
@@ -106,6 +110,27 @@ export function AdminSweepsPage() {
   const [running, setRunning] = useState(false);
   const [runProgress, setRunProgress] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
+  const [timerSec, setTimerSec] = useState(60);
+
+  useEffect(() => {
+    if (!running) {
+      setTimerSec(60);
+      return;
+    }
+    const id = setInterval(() => {
+      setTimerSec((s) => (s <= 0 ? 60 : s - 1));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [running]);
+
+  useEffect(() => {
+    if (!running) return;
+    setRunProgress((prev) => {
+      const base =
+        prev?.replace(/\s\(\d{2}s\)$/, "") ?? "Funding all addresses + sweeping queue…";
+      return `${base} (${String(timerSec).padStart(2, "0")}s)`;
+    });
+  }, [timerSec, running]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -156,7 +181,8 @@ export function AdminSweepsPage() {
   async function runSweepNow() {
     setRunning(true);
     setRunResult(null);
-    setRunProgress("Resetting failed sweeps…");
+    setTimerSec(60);
+    setRunProgress("Funding BNB on all addresses…");
 
     await fetch("/api/admin/sweeps/reset-failed", { method: "POST" });
 
@@ -173,18 +199,22 @@ export function AdminSweepsPage() {
       completed: 0,
       failed: 0,
       processed: 0,
+      batchAddressesFunded: 0,
     };
 
-    const maxRounds = 20;
+    const maxRounds = 10;
 
     for (let round = 1; round <= maxRounds; round++) {
-      setRunProgress(`Sweeping deposit ${round}… (one at a time)`);
+      setRunProgress(
+        `Batch ${round}: fund all addresses + sweep queue… ${String(timerSec).padStart(2, "0")}s`
+      );
 
       const res = await fetch("/api/admin/sweeps/run", { method: "POST" });
       const data = (await res.json()) as RunResult & {
         completed?: number;
         failed?: number;
         processed?: number;
+        batchAddressesFunded?: number;
       };
 
       aggregated.rounds = round;
@@ -195,6 +225,8 @@ export function AdminSweepsPage() {
       aggregated.completed = (aggregated.completed ?? 0) + (data.completed ?? 0);
       aggregated.failed = (aggregated.failed ?? 0) + (data.failed ?? 0);
       aggregated.processed = (aggregated.processed ?? 0) + (data.processed ?? 0);
+      aggregated.batchAddressesFunded =
+        (aggregated.batchAddressesFunded ?? 0) + (data.batchAddressesFunded ?? 0);
       aggregated.pendingFound = data.pendingFound ?? 0;
       aggregated.results.push(...(data.results ?? []));
       aggregated.errors.push(...(data.errors ?? []));
@@ -237,7 +269,9 @@ export function AdminSweepsPage() {
             Reset failed
           </Button>
           <Button size="sm" onClick={runSweepNow} disabled={running || loading}>
-            {running ? (runProgress ?? "Sweeping…") : "Run sweep now"}
+            {running
+              ? `${runProgress ?? "Sweeping…"} (${String(timerSec).padStart(2, "0")}s)`
+              : "Run sweep now"}
           </Button>
         </div>
       </div>
@@ -299,6 +333,9 @@ export function AdminSweepsPage() {
           <p className="text-xs text-text-muted">
             completed={runResult.completed ?? 0} failed={runResult.failed ?? 0} gasFunded=
             {runResult.gasFunded} swept={runResult.swept} refunded={runResult.refunded}
+            {runResult.batchAddressesFunded != null &&
+              runResult.batchAddressesFunded > 0 &&
+              ` · batch BNB→${runResult.batchAddressesFunded} addr`}
           </p>
           {runResult.errors.map((e) => (
             <p key={e} className="text-xs text-red-400 font-mono">
@@ -356,7 +393,7 @@ export function AdminSweepsPage() {
                   <p className="text-xs text-text-muted">{d.user.email}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  {statusBadge(d.sweepStatus)}
+                  {statusBadge(d.sweepStatus, d.sweptAt, d.sweepTxHash)}
                   {d.sweepStatus === "failed" && (
                     <Button
                       size="sm"

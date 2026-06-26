@@ -1,10 +1,7 @@
 import { prisma } from "@/lib/db";
-import {
-  getMaxSweepsPerTick,
-  getMaxSweepRetries,
-  SWEEP_STATUS,
-} from "@/deposits/sweeper/config";
+import { getMaxSweepsPerTick, getMaxSweepRetries, SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
+import { fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
@@ -17,6 +14,7 @@ export type SweeperTickResult = {
   gasFunded: number;
   swept: number;
   refunded: number;
+  batchAddressesFunded?: number;
   durationMs: number;
   diagnostics?: Awaited<ReturnType<typeof getSweeperDiagnostics>>;
   results: {
@@ -96,6 +94,7 @@ export async function findDepositsToSweep(limit: number) {
 export async function runSweeperTick(options?: {
   limit?: number;
   includeDiagnostics?: boolean;
+  batchFund?: boolean;
 }): Promise<SweeperTickResult> {
   const started = Date.now();
   const errors: string[] = [];
@@ -135,6 +134,14 @@ export async function runSweeperTick(options?: {
   await resetStaleSweepFailures();
 
   const limit = options?.limit ?? getMaxSweepsPerTick();
+  let batchAddressesFunded = 0;
+
+  if (options?.batchFund !== false) {
+    const batch = await fundGasForAllPendingAddresses(limit);
+    if (!batch.ok && batch.error) errors.push(batch.error);
+    batchAddressesFunded = batch.addressesFunded ?? 0;
+  }
+
   const pending = await findDepositsToSweep(limit);
 
   logSweepEvent("Pending deposits queried", {
@@ -210,6 +217,7 @@ export async function runSweeperTick(options?: {
     gasFunded,
     swept,
     refunded,
+    batchAddressesFunded,
     durationMs,
     diagnostics: options?.includeDiagnostics ? diagnostics : undefined,
     results,

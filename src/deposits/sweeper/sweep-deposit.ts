@@ -23,10 +23,14 @@ import {
   readAddressBalances,
 } from "@/deposits/sweeper/address-sweep";
 import {
+  isReceiptWaitTimeout,
+  isTransactionConfirmed,
+  waitForConfirmations as waitForTxConfirmations,
+} from "@/deposits/sweeper/confirmations";
+import {
   getMaxSweepRetries,
   getMinBnbRefundWei,
   getSweepTxConfirmations,
-  getSweepTxWaitMs,
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
@@ -40,83 +44,6 @@ export type SweepResult = {
   sweepTxHash?: string | null;
   gasRefundTxHash?: string | null;
 };
-
-async function sleep(ms: number) {
-  await new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
-function isReceiptWaitTimeout(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return (
-    error.name === "WaitForTransactionReceiptTimeoutError" ||
-    error.message.includes("Timed out while waiting for transaction")
-  );
-}
-
-/** Wait for BSC confirmations — polls up to SWEEPER_TX_WAIT_MS (default 3 min). */
-async function waitForConfirmations(txHash: `0x${string}`, required: number) {
-  const client = getBscPublicClient();
-  const timeout = getSweepTxWaitMs();
-  const pollingInterval = 3_000;
-  const started = Date.now();
-
-  const existing = await client.getTransactionReceipt({ hash: txHash }).catch(() => null);
-  if (existing) {
-    const latest = await client.getBlockNumber();
-    const confirmations = Number(latest - existing.blockNumber + 1n);
-    if (confirmations >= required) {
-      if (existing.status !== "success") {
-        throw new Error(`Transaction reverted: ${txHash}`);
-      }
-      return existing;
-    }
-  }
-
-  logSweepEvent("Waiting for tx confirmations", {
-    depositId: "—",
-    step: "wait_confirmations",
-    sweepTxHash: txHash,
-    amount: String(required),
-  });
-
-  try {
-    const receipt = await client.waitForTransactionReceipt({
-      hash: txHash,
-      confirmations: required,
-      timeout,
-      pollingInterval,
-    });
-    if (receipt.status !== "success") {
-      throw new Error(`Transaction reverted: ${txHash}`);
-    }
-    return receipt;
-  } catch (error) {
-    if (!isReceiptWaitTimeout(error)) throw error;
-
-    logSweepEvent("Receipt wait timed out — polling fallback", {
-      depositId: "—",
-      step: "wait_confirmations_fallback",
-      sweepTxHash: txHash,
-    });
-
-    while (Date.now() - started < timeout) {
-      const receipt = await client.getTransactionReceipt({ hash: txHash }).catch(() => null);
-      if (receipt) {
-        const latest = await client.getBlockNumber();
-        const confirmations = Number(latest - receipt.blockNumber + 1n);
-        if (confirmations >= required) {
-          if (receipt.status !== "success") {
-            throw new Error(`Transaction reverted: ${txHash}`);
-          }
-          return receipt;
-        }
-      }
-      await sleep(pollingInterval);
-    }
-
-    throw error;
-  }
-}
 
 async function resolveDerivationIndex(
   depositId: string,
@@ -256,6 +183,8 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     });
 
     const publicClient = getBscPublicClient();
+    const waitForConfirmations = (txHash: `0x${string}`, required: number) =>
+      waitForTxConfirmations(publicClient, txHash, required);
 
     logSweepEvent("Local signing ready (sendRawTransaction only)", {
       ...ctx,
@@ -271,8 +200,43 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       gasSent: formatUnits(balances.bnb, 18),
     });
 
-    // ── Phase 1: Gas funding (balance-first, multiple txs if needed) ────
     let gasFundingTxHash = deposit.gasFundingTxHash as `0x${string}` | null;
+    let sweepTxHash = deposit.sweepTxHash as `0x${string}` | null;
+
+    // ── Already swept: no USDT left at address ───────────────────────────
+    if (balances.usdt === 0n) {
+      if (!sweepTxHash) {
+        sweepTxHash = await findPriorSweepTxAtAddress(depositAddress, depositId);
+      }
+
+      if (sweepTxHash) {
+        if (!(await isTransactionConfirmed(publicClient, sweepTxHash, getSweepTxConfirmations()))) {
+          await waitForConfirmations(sweepTxHash, getSweepTxConfirmations());
+        }
+
+        await prisma.cryptoDeposit.update({
+          where: { id: depositId },
+          data: {
+            sweepTxHash,
+            sweepStatus: SWEEP_STATUS.SWEPT,
+            sweptAt: deposit.sweptAt ?? new Date(),
+            sweepError: null,
+          },
+        });
+        ctx.sweepTxHash = sweepTxHash;
+        logSweepEvent("Address has no USDT — sweep already done on-chain", {
+          ...ctx,
+          step: "already_swept_on_chain",
+          sweepTxHash,
+        });
+      } else {
+        logSweepEvent("Address has no USDT and no sweep tx — skipping transfer", {
+          ...ctx,
+          step: "address_empty",
+        });
+      }
+    } else {
+    // ── Phase 1: Gas funding (balance-first, multiple txs if needed) ────
 
     if (balances.usdt > 0n) {
       const gasEstimate = await estimateUsdtTransferGas(
@@ -358,7 +322,6 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     }
 
     // ── Phase 2: USDT sweep ───────────────────────────────────────────────
-    let sweepTxHash = deposit.sweepTxHash as `0x${string}` | null;
     balances = await readAddressBalances(publicClient, depositAddress);
 
     if (balances.usdt > 0n && !sweepTxHash) {
@@ -426,30 +389,9 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           sweepTxHash,
         });
       }
-    } else if (balances.usdt === 0n && !sweepTxHash) {
-      const priorSweep = await findPriorSweepTxAtAddress(depositAddress, depositId);
-      if (priorSweep) {
-        sweepTxHash = priorSweep;
-        await prisma.cryptoDeposit.update({
-          where: { id: depositId },
-          data: {
-            sweepTxHash: priorSweep,
-            sweepStatus: SWEEP_STATUS.SWEPT,
-            sweptAt: deposit.sweptAt ?? new Date(),
-          },
-        });
-        ctx.sweepTxHash = priorSweep;
-        logSweepEvent("USDT already swept at address — linked prior sweep tx", {
-          ...ctx,
-          step: "usdt_sweep_linked",
-          sweepTxHash: priorSweep,
-        });
-      } else {
-        logSweepEvent("No USDT at address — sweep not required", { ...ctx, step: "no_usdt" });
-      }
     }
 
-    if (sweepTxHash) {
+    if (sweepTxHash && balances.usdt > 0n) {
       await waitForConfirmations(sweepTxHash, getSweepTxConfirmations());
 
       await prisma.cryptoDeposit.update({
@@ -461,6 +403,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       });
       logSweepEvent("USDT sweep confirmed", { ...ctx, step: "sweep_confirmed" });
     }
+    } // end balances.usdt > 0 (gas + sweep)
 
     // ── Phase 3: BNB refund ───────────────────────────────────────────────
     let gasRefundTxHash = deposit.gasRefundTxHash as `0x${string}` | null;
