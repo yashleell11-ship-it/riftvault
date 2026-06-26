@@ -37,7 +37,10 @@ export async function resetStaleSendTransactionFailures() {
       status: "confirmed",
       walletTxId: { not: null },
       sweepStatus: SWEEP_STATUS.FAILED,
-      sweepError: { contains: "eth_sendTransaction" },
+      OR: [
+        { sweepError: { contains: "eth_sendTransaction" } },
+        { sweepError: { contains: "insufficient funds for gas" } },
+      ],
     },
     data: {
       sweepStatus: SWEEP_STATUS.PENDING,
@@ -47,7 +50,7 @@ export async function resetStaleSendTransactionFailures() {
   });
 
   if (reset.count > 0) {
-    logSweepEvent("Reset stale eth_sendTransaction sweep failures", {
+    logSweepEvent("Reset stale sweep failures (gas/sendTransaction)", {
       depositId: "—",
       step: "reset_stale_failures",
       amount: String(reset.count),
