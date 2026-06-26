@@ -14,8 +14,8 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
-/** Run one sweeper tick immediately (admin). */
-export async function POST() {
+/** Run sweeper tick immediately (admin). Processes one deposit per request (UI loops for queue drain). */
+export async function POST(request: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
@@ -23,7 +23,10 @@ export async function POST() {
 
   try {
     const diagnostics = await getSweeperDiagnostics();
-    const result = await runSweeperTick({ limit: 1, includeDiagnostics: true });
+    const { searchParams } = new URL(request.url);
+    const limitParam = Number(searchParams.get("limit") ?? "1");
+    const limit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(Math.floor(limitParam), 1) : 1;
+    const result = await runSweeperTick({ limit, includeDiagnostics: true });
 
     return NextResponse.json({
       ok: diagnostics.enabled && result.errors.length === 0,

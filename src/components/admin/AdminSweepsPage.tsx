@@ -47,6 +47,10 @@ type RunResult = {
     gasRefundTxHash?: string | null;
   }[];
   diagnostics?: Stats["diagnostics"];
+  rounds?: number;
+  completed?: number;
+  failed?: number;
+  processed?: number;
 };
 
 type Deposit = {
@@ -100,6 +104,7 @@ export function AdminSweepsPage() {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["key"]>("all");
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
+  const [runProgress, setRunProgress] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<RunResult | null>(null);
 
   const load = useCallback(async () => {
@@ -123,9 +128,56 @@ export function AdminSweepsPage() {
   async function runSweepNow() {
     setRunning(true);
     setRunResult(null);
-    const res = await fetch("/api/admin/sweeps/run", { method: "POST" });
-    const data = await res.json();
-    setRunResult(data);
+    setRunProgress("Starting…");
+
+    const aggregated: RunResult = {
+      ok: true,
+      pendingFound: 0,
+      gasFunded: 0,
+      swept: 0,
+      refunded: 0,
+      durationMs: 0,
+      errors: [],
+      results: [],
+      rounds: 0,
+      completed: 0,
+      failed: 0,
+      processed: 0,
+    };
+
+    const maxRounds = 20;
+
+    for (let round = 1; round <= maxRounds; round++) {
+      setRunProgress(`Sweeping deposit ${round}… (one at a time)`);
+
+      const res = await fetch("/api/admin/sweeps/run", { method: "POST" });
+      const data = (await res.json()) as RunResult & {
+        completed?: number;
+        failed?: number;
+        processed?: number;
+      };
+
+      aggregated.rounds = round;
+      aggregated.durationMs += data.durationMs ?? 0;
+      aggregated.gasFunded += data.gasFunded ?? 0;
+      aggregated.swept += data.swept ?? 0;
+      aggregated.refunded += data.refunded ?? 0;
+      aggregated.completed = (aggregated.completed ?? 0) + (data.completed ?? 0);
+      aggregated.failed = (aggregated.failed ?? 0) + (data.failed ?? 0);
+      aggregated.processed = (aggregated.processed ?? 0) + (data.processed ?? 0);
+      aggregated.pendingFound = data.pendingFound ?? 0;
+      aggregated.results.push(...(data.results ?? []));
+      aggregated.errors.push(...(data.errors ?? []));
+      aggregated.ok = aggregated.ok && Boolean(data.ok);
+      if (data.diagnostics) aggregated.diagnostics = data.diagnostics;
+
+      setRunResult({ ...aggregated });
+
+      if ((data.processed ?? 0) === 0) break;
+      if ((data.failed ?? 0) > 0 && (data.completed ?? 0) === 0) break;
+    }
+
+    setRunProgress(null);
     setRunning(false);
     await load();
   }
@@ -148,7 +200,7 @@ export function AdminSweepsPage() {
             Refresh
           </Button>
           <Button size="sm" onClick={runSweepNow} disabled={running || loading}>
-            {running ? "Sweeping…" : "Run sweep now"}
+            {running ? (runProgress ?? "Sweeping…") : "Run sweep now"}
           </Button>
         </div>
       </div>
@@ -203,20 +255,25 @@ export function AdminSweepsPage() {
       {runResult && (
         <Card className="mb-4 border-accent/30 bg-accent/5 text-sm px-4 py-3 space-y-1">
           <p className="font-medium">
-            Manual run {runResult.ok ? "succeeded" : "failed"} ({runResult.durationMs}ms)
+            Manual run {runResult.ok ? "succeeded" : "finished with errors"} (
+            {runResult.rounds ?? 1} deposit
+            {(runResult.rounds ?? 1) === 1 ? "" : "s"}, {runResult.durationMs}ms total)
           </p>
           <p className="text-xs text-text-muted">
-            pending={runResult.pendingFound} gasFunded={runResult.gasFunded} swept=
-            {runResult.swept} refunded={runResult.refunded}
+            completed={runResult.completed ?? 0} failed={runResult.failed ?? 0} gasFunded=
+            {runResult.gasFunded} swept={runResult.swept} refunded={runResult.refunded}
           </p>
           {runResult.errors.map((e) => (
             <p key={e} className="text-xs text-red-400 font-mono">
               {e}
             </p>
           ))}
-          {runResult.results[0]?.sweepTxHash && (
-            <p className="text-xs font-mono">sweepTx: {runResult.results[0].sweepTxHash}</p>
-          )}
+          {runResult.results.map((r) => (
+            <p key={r.depositId} className="text-xs font-mono text-text-muted">
+              {r.depositId.slice(0, 8)}… → {r.status}
+              {r.sweepTxHash ? ` · ${r.sweepTxHash.slice(0, 10)}…` : ""}
+            </p>
+          ))}
         </Card>
       )}
 
