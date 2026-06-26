@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
+import { readOnChainUsdtByAddress } from "@/deposits/sweeper/queue";
 
 const DEPOSIT_SELECT = {
   id: true,
@@ -72,11 +73,18 @@ export async function GET(request: Request) {
     select: DEPOSIT_SELECT,
   });
 
+  const onChainUsdt = await readOnChainUsdtByAddress(
+    deposits.map((d) => d.toAddress).filter(Boolean) as string[]
+  );
+
   const diagnostics = await getSweeperDiagnostics();
 
   return NextResponse.json({
     enabled: diagnostics.enabled,
     diagnostics,
-    deposits,
+    deposits: deposits.map((d) => ({
+      ...d,
+      onChainUsdt: d.toAddress ? onChainUsdt.get(d.toAddress.toLowerCase()) ?? "0" : null,
+    })),
   });
 }

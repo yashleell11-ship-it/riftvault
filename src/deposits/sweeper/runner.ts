@@ -3,13 +3,16 @@ import {
   getAdminSweepBatchLimit,
   getBatchFundAddressLimit,
   getMaxSweepsPerTick,
-  getMaxSweepRetries,
-  getMinSweepUsdt,
   getSweepDrainMaxMs,
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
+import {
+  countDepositsToSweep,
+  findDepositsToSweep,
+  sweepQueueWhere,
+} from "@/deposits/sweeper/queue";
 import { reconcileSiblingDepositsAtEmptyAddresses } from "@/deposits/sweeper/reconcile";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
@@ -43,30 +46,7 @@ export type SweeperDrainResult = SweeperTickResult & {
   drained: boolean;
 };
 
-function sweepQueueWhere() {
-  const maxRetries = getMaxSweepRetries();
-  const minUsdt = getMinSweepUsdt();
-  return {
-    status: "confirmed" as const,
-    walletTxId: { not: null },
-    amount: { gte: minUsdt },
-    NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
-    OR: [
-      { sweepStatus: null },
-      { sweepStatus: SWEEP_STATUS.PENDING },
-      { sweepStatus: SWEEP_STATUS.FAILED, retryCount: { lt: maxRetries } },
-      { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
-      { sweepStatus: SWEEP_STATUS.SWEEPING },
-      { sweepStatus: SWEEP_STATUS.SWEPT },
-      { sweepStatus: SWEEP_STATUS.REFUNDING },
-    ],
-  };
-}
-
-/** Count deposits still needing consolidation. */
-export async function countDepositsToSweep(): Promise<number> {
-  return prisma.cryptoDeposit.count({ where: sweepQueueWhere() });
-}
+export { countDepositsToSweep, findDepositsToSweep, sweepQueueWhere };
 
 /** Reset every failed sweep so drain can retry. */
 export async function resetAllSweepFailures() {
@@ -132,29 +112,6 @@ export async function resetStaleSweepFailures() {
 
 /** @deprecated Use resetStaleSweepFailures */
 export const resetStaleSendTransactionFailures = resetStaleSweepFailures;
-
-/** Find confirmed, credited deposits that still need on-chain consolidation. */
-export async function findDepositsToSweep(limit: number) {
-  const where = sweepQueueWhere();
-
-  const finishable = await prisma.cryptoDeposit.findMany({
-    where: { ...where, sweepTxHash: { not: null } },
-    orderBy: { createdAt: "asc" },
-    take: limit,
-    select: { id: true, sweepStatus: true },
-  });
-
-  if (finishable.length >= limit) return finishable;
-
-  const rest = await prisma.cryptoDeposit.findMany({
-    where: { ...where, sweepTxHash: null },
-    orderBy: { createdAt: "asc" },
-    take: limit - finishable.length,
-    select: { id: true, sweepStatus: true },
-  });
-
-  return [...finishable, ...rest];
-}
 
 export async function runSweeperTick(options?: {
   limit?: number;

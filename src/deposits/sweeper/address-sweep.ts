@@ -6,6 +6,7 @@ import { gasFundingShortfall } from "@/deposits/blockchain/gas";
 import { sendSignedTransaction } from "@/deposits/blockchain/send-signed";
 import type { LocalAccount } from "viem/accounts";
 import { getMaxGasFundingTxs, getSweepTxConfirmations } from "@/deposits/sweeper/config";
+import { depositAddressEquals } from "@/deposits/sweeper/queue";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
 export type AddressBalances = {
@@ -31,7 +32,7 @@ export async function findPriorSweepTxAtAddress(
 ): Promise<`0x${string}` | null> {
   const prior = await prisma.cryptoDeposit.findFirst({
     where: {
-      toAddress: depositAddress.toLowerCase(),
+      toAddress: depositAddressEquals(depositAddress),
       id: { not: excludeDepositId },
       sweepTxHash: { not: null },
       status: "confirmed",

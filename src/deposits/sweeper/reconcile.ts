@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { readAddressBalances } from "@/deposits/sweeper/address-sweep";
+import { depositAddressEquals } from "@/deposits/sweeper/queue";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
@@ -45,7 +46,7 @@ export async function reconcileSiblingDepositsAtEmptyAddresses(): Promise<number
 
     const reference = await prisma.cryptoDeposit.findFirst({
       where: {
-        toAddress: addr,
+        toAddress: depositAddressEquals(addr),
         status: "confirmed",
         OR: [{ sweepTxHash: { not: null } }, { sweepStatus: SWEEP_STATUS.COMPLETED }],
       },
@@ -104,7 +105,7 @@ export async function isAddressAlreadyFullySwept(toAddress: string): Promise<boo
 
   const done = await prisma.cryptoDeposit.findFirst({
     where: {
-      toAddress: addr,
+      toAddress: depositAddressEquals(addr),
       sweepStatus: SWEEP_STATUS.COMPLETED,
       sweepTxHash: { not: null },
       status: "confirmed",

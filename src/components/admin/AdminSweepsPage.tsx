@@ -72,6 +72,7 @@ type Deposit = {
   createdAt: string;
   updatedAt: string;
   user: { email: string; displayName: string };
+  onChainUsdt?: string | null;
 };
 
 const FILTERS = [
@@ -114,7 +115,7 @@ function ExplorerLink({
 }
 
 function aggregatedDrained(result: RunResult) {
-  return Boolean(result.drained) || (result.remainingPending ?? result.pendingFound ?? 0) === 0;
+  return Boolean(result.drained) && (result.remainingPending ?? 0) === 0;
 }
 
 function statusBadge(status: string | null, sweptAt: string | null, sweepTxHash: string | null) {
@@ -253,7 +254,7 @@ export function AdminSweepsPage() {
         rounds?: number;
       };
 
-      aggregated.rounds = (aggregated.rounds ?? 0) + (data.rounds ?? 1);
+      aggregated.rounds = (aggregated.rounds ?? 0) + (typeof data.rounds === "number" ? data.rounds : 1);
       aggregated.durationMs += data.durationMs ?? 0;
       aggregated.gasFunded += data.gasFunded ?? 0;
       aggregated.swept += data.swept ?? 0;
@@ -273,7 +274,8 @@ export function AdminSweepsPage() {
 
       setRunResult({ ...aggregated });
 
-      if (data.drained || (data.remainingPending ?? 0) === 0) break;
+      if (data.drained && (data.remainingPending ?? 0) === 0) break;
+      if ((data.remainingPending ?? 0) === 0 && (data.completed ?? 0) === 0) break;
       if ((data.processed ?? 0) === 0 && (data.completed ?? 0) === 0) break;
     }
 
@@ -367,9 +369,11 @@ export function AdminSweepsPage() {
           <p className="font-medium">
             {aggregatedDrained(runResult)
               ? "All USDT consolidated to treasury"
-              : runResult.ok
-                ? "Sweep finished"
-                : "Sweep finished with errors"}{" "}
+              : (runResult.remainingPending ?? 0) > 0
+                ? `Still ${runResult.remainingPending} in queue — run again`
+                : runResult.ok
+                  ? "Sweep finished"
+                  : "Sweep finished with errors"}{" "}
             ({runResult.rounds ?? 1} server round
             {(runResult.rounds ?? 1) === 1 ? "" : "s"}, {runResult.durationMs}ms)
           </p>
@@ -457,6 +461,11 @@ export function AdminSweepsPage() {
                 <span className="text-gold font-semibold">
                   {d.amount} {d.asset}
                 </span>
+                {d.onChainUsdt != null && (
+                  <span className="text-text-muted text-xs ml-2">
+                    on-chain: <span className="text-accent font-medium">{d.onChainUsdt} USDT</span>
+                  </span>
+                )}
                 {d.toAddress && (
                   <span className="text-text-muted text-xs ml-2 font-mono">
                     <ExplorerLink hash={d.toAddress} type="address" len={8} />

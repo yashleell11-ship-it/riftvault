@@ -10,7 +10,8 @@ import {
 } from "@/deposits/blockchain/wallet-client";
 import { fundBnbUntilTarget, readAddressBalances } from "@/deposits/sweeper/address-sweep";
 import { waitForConfirmations } from "@/deposits/sweeper/confirmations";
-import { getMaxSweepRetries, getMinSweepUsdt, getBatchFundAddressLimit, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { getMinSweepUsdt, getBatchFundAddressLimit, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { sweepQueueWhere } from "@/deposits/sweeper/queue";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
 /** Mark sub-minimum deposits completed without on-chain sweep. */
@@ -39,24 +40,8 @@ async function completeBelowMinDeposits() {
 }
 
 async function listPendingDepositIds(limit: number) {
-  const maxRetries = getMaxSweepRetries();
-  const minUsdt = getMinSweepUsdt();
   return prisma.cryptoDeposit.findMany({
-    where: {
-      status: "confirmed",
-      walletTxId: { not: null },
-      amount: { gte: minUsdt },
-      NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
-      OR: [
-        { sweepStatus: null },
-        { sweepStatus: SWEEP_STATUS.PENDING },
-        { sweepStatus: SWEEP_STATUS.FAILED, retryCount: { lt: maxRetries } },
-        { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
-        { sweepStatus: SWEEP_STATUS.SWEEPING },
-        { sweepStatus: SWEEP_STATUS.SWEPT },
-        { sweepStatus: SWEEP_STATUS.REFUNDING },
-      ],
-    },
+    where: sweepQueueWhere(),
     orderBy: { createdAt: "asc" },
     take: limit,
     select: { id: true },
