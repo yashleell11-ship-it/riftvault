@@ -5,6 +5,7 @@ import { runPaymentListenerTick } from "@/payments/listener/runner";
 import { isUsdtPaymentsEnabled } from "@/payments/blockchain/config";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 function isListenerEnabled() {
   return isUsdtPaymentsEnabled() || uniqueDepositAddressesEnabled();
@@ -35,7 +36,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await runPaymentListenerTick({ maxBlocks: 200 });
+    const result = await runPaymentListenerTick({ maxBlocks: 80 });
     return NextResponse.json({ ok: true, ...result, scanned: result.scanned });
   } catch (error) {
     const details = serializeError(error);

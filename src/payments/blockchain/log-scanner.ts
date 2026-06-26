@@ -1,12 +1,14 @@
 import type { Log, PublicClient } from "viem";
 import { ERC20_TRANSFER_EVENT, getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 
-/** Max blocks per eth_getLogs call (BSC public RPCs often cap ~50–100). */
+/** Max blocks per eth_getLogs call (BSC public RPCs often cap ~10–50). */
 export function getLogChunkBlockSize(): bigint {
-  const n = Number(process.env.BSC_LOG_CHUNK_BLOCKS ?? 50);
-  const size = Number.isFinite(n) && n > 0 ? Math.floor(n) : 50;
-  return BigInt(Math.min(500, Math.max(1, size)));
+  const n = Number(process.env.BSC_LOG_CHUNK_BLOCKS ?? 20);
+  const size = Number.isFinite(n) && n > 0 ? Math.floor(n) : 20;
+  return BigInt(Math.min(200, Math.max(1, size)));
 }
+
+const ADDRESS_BATCH_SIZE = 25;
 
 type TransferLogQuery = {
   fromBlock: bigint;
@@ -14,6 +16,14 @@ type TransferLogQuery = {
   /** When set, only transfers to these addresses (required for deposit scans). */
   toAddresses?: `0x${string}`[];
 };
+
+function isRpcLimitError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: number }).code;
+  if (code === -32005) return true;
+  const message = String((error as Error).message ?? "").toLowerCase();
+  return message.includes("limit exceeded") || message.includes("exceeds defined limit");
+}
 
 /**
  * Fetch USDT Transfer logs in small block chunks to stay within RPC limits.
@@ -40,15 +50,36 @@ export async function fetchUsdtTransferLogs(
   for (let start = fromBlock; start <= toBlock; start += chunkSize) {
     const end = start + chunkSize - 1n > toBlock ? toBlock : start + chunkSize - 1n;
 
-    for (const to of uniqueTo) {
-      const logs = await client.getLogs({
-        address: token,
-        event: ERC20_TRANSFER_EVENT,
-        args: { to },
-        fromBlock: start,
-        toBlock: end,
-      });
-      allLogs.push(...logs);
+    for (let i = 0; i < uniqueTo.length; i += ADDRESS_BATCH_SIZE) {
+      const batch = uniqueTo.slice(i, i + ADDRESS_BATCH_SIZE);
+
+      await Promise.all(
+        batch.map(async (to) => {
+          const pending: { from: bigint; to: bigint }[] = [{ from: start, to: end }];
+
+          while (pending.length > 0) {
+            const range = pending.pop()!;
+            try {
+              const logs = await client.getLogs({
+                address: token,
+                event: ERC20_TRANSFER_EVENT,
+                args: { to },
+                fromBlock: range.from,
+                toBlock: range.to,
+              });
+              allLogs.push(...logs);
+            } catch (error) {
+              if (isRpcLimitError(error) && range.from < range.to) {
+                const mid = range.from + (range.to - range.from) / 2n;
+                pending.push({ from: mid + 1n, to: range.to });
+                pending.push({ from: range.from, to: mid });
+              } else {
+                throw error;
+              }
+            }
+          }
+        })
+      );
     }
   }
 

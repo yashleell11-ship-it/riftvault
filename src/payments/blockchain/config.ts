@@ -23,7 +23,7 @@ export function getBscRpcUrl(): string {
   return (
     process.env.BSC_RPC_URL?.trim() ||
     process.env.NEXT_PUBLIC_BSC_RPC_URL?.trim() ||
-    "https://bsc-dataseed.binance.org"
+    "https://bsc.publicnode.com"
   );
 }
 

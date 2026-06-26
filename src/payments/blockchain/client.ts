@@ -6,13 +6,21 @@ let cachedClient: PublicClient | null = null;
 
 const FALLBACK_BSC_RPCS = [
   "https://bsc.publicnode.com",
-  "https://bsc-dataseed1.binance.org",
+  "https://bsc-dataseed.binance.org",
+  "https://bsc-dataseed2.binance.org",
 ] as const;
 
 function buildTransports() {
   const primary = getBscRpcUrl();
-  const urls = [primary, ...FALLBACK_BSC_RPCS.filter((url) => url !== primary)];
-  return urls.map((url) =>
+  const urls = [
+    "https://bsc.publicnode.com",
+    primary,
+    ...FALLBACK_BSC_RPCS.filter(
+      (url) => url !== primary && url !== "https://bsc.publicnode.com"
+    ),
+  ];
+  const unique = [...new Set(urls)];
+  return unique.map((url) =>
     http(url, {
       timeout: 30_000,
       retryCount: 2,
