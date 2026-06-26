@@ -48,6 +48,7 @@ export function getDepositRequiredConfirmations(): number {
 }
 
 export const DEPOSIT_LISTENER_STATE_ID = "bsc-usdt-deposits";
+/** @deprecated Unified listener uses PAYMENT_LISTENER_STATE_ID only. */
 export const DEPOSIT_ADDRESS_ROTATION_STATE_ID = "bsc-usdt-deposit-rotate";
 
 export function getDepositScanMaxAddressesPerTick(): number {

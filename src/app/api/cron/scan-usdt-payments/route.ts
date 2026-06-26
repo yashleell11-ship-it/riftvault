@@ -36,13 +36,15 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await runPaymentListenerTick({ maxBlocks: 15, skipDeposits: true });
+    const result = await runPaymentListenerTick({ maxBlocks: 12 });
     return NextResponse.json({
       ok: true,
       scanned: result.scanned,
       matched: result.matched,
       depositMatched: result.depositMatched,
       latestBlock: result.latestBlock.toString(),
+      fromBlock: result.fromBlock.toString(),
+      toBlock: result.toBlock.toString(),
     });
   } catch (error) {
     const details = serializeError(error);

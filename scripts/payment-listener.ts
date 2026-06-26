@@ -26,12 +26,10 @@ async function main() {
 
   const tick = async () => {
     try {
-      const result = await runPaymentListenerTick({ maxBlocks: 100 });
-      if (result.matched > 0 || result.depositMatched > 0) {
-        console.log(
-          `[payment-listener] Scanned ${result.scanned} blocks — checkout: ${result.matched}, deposits: ${result.depositMatched}`
-        );
-      }
+      const result = await runPaymentListenerTick({ maxBlocks: 12 });
+      console.log(
+        `[payment-listener] Scanned ${result.scanned} blocks (${result.fromBlock}–${result.toBlock}) — checkout: ${result.matched}, deposits: ${result.depositMatched}`
+      );
     } catch (error) {
       console.error("[payment-listener] Tick error:", error);
     }

@@ -1,31 +1,39 @@
-import {
-  scanUsdtTransfers,
-  updatePaymentConfirmations,
-} from "@/payments/listener/transfer-scanner";
 import { expireStalePaymentOrders } from "@/payments/services/expire-orders.service";
-import { scanUserDepositTransfers } from "@/deposits/listener/deposit-scanner";
+import { updatePaymentConfirmations } from "@/payments/listener/transfer-scanner";
+import {
+  scanUsdtTransfersUnified,
+  type UnifiedScanOptions,
+} from "@/payments/listener/unified-scanner";
+import { updateDepositConfirmations } from "@/deposits/services/confirm-deposit";
 
-/** Single listener tick — safe to call from cron, API poll, or standalone script. */
-export async function runPaymentListenerTick(options?: {
+export type PaymentListenerTickOptions = UnifiedScanOptions & {
   paymentOrderId?: string;
-  maxBlocks?: number;
-  /** Skip unique-address deposit scan (use for serverless cron — deposits scan on wallet poll). */
-  skipDeposits?: boolean;
-}) {
+};
+
+/** Single listener tick — checkout + wallet deposits, one blockchain cursor. */
+export async function runPaymentListenerTick(options?: PaymentListenerTickOptions) {
   await expireStalePaymentOrders();
 
-  const checkoutScan = await scanUsdtTransfers({
-    paymentOrderId: options?.paymentOrderId,
-    maxBlocks: options?.maxBlocks,
-  });
+  const scan = await scanUsdtTransfersUnified(options);
 
   await updatePaymentConfirmations(options?.paymentOrderId);
+  await updateDepositConfirmations();
 
-  const depositScan = options?.skipDeposits
-    ? { scanned: 0, matched: 0 }
-    : await scanUserDepositTransfers({
-        maxBlocks: options?.maxBlocks,
-      });
+  return {
+    scanned: scan.scanned,
+    matched: scan.matched,
+    depositMatched: scan.depositMatched,
+    latestBlock: scan.latestBlock,
+    fromBlock: scan.fromBlock,
+    toBlock: scan.toBlock,
+  };
+}
 
-  return { ...checkoutScan, depositMatched: depositScan.matched };
+/** Admin / CLI historical rescan — idempotent, does not move the listener cursor by default. */
+export async function rescanUsdtBlockRange(fromBlock: bigint, toBlock: bigint) {
+  return scanUsdtTransfersUnified({
+    fromBlock,
+    toBlock,
+    advanceCursor: false,
+  });
 }

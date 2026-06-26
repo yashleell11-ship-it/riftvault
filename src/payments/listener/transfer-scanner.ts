@@ -1,20 +1,5 @@
 import { getBscPublicClient } from "@/payments/blockchain/client";
-import {
-  getReceivingWallet,
-  PAYMENT_LISTENER_STATE_ID,
-} from "@/payments/blockchain/config";
-import { addressesEqual } from "@/payments/blockchain/amounts";
-import {
-  decodeTransferLog,
-  fetchUsdtTransferLogs,
-  getLogChunkBlockSize,
-} from "@/payments/blockchain/log-scanner";
-import {
-  getListenerCursor,
-  isTransferProcessed,
-  setListenerCursor,
-} from "@/payments/database/payment-repository";
-import { processDetectedTransfer } from "@/payments/listener/payment-matcher";
+import { getReceivingWallet } from "@/payments/blockchain/config";
 import { prisma } from "@/lib/db";
 
 export type ScannedTransfer = {
@@ -25,96 +10,6 @@ export type ScannedTransfer = {
   toAddress: string;
   amountRaw: string;
 };
-
-export async function scanUsdtTransfers(options?: {
-  maxBlocks?: number;
-  paymentOrderId?: string;
-}): Promise<{ scanned: number; matched: number; latestBlock: bigint }> {
-  const receiving = getReceivingWallet();
-  if (!receiving) {
-    console.warn("[payment-listener] RECEIVING_WALLET not configured");
-    return { scanned: 0, matched: 0, latestBlock: 0n };
-  }
-
-  const client = getBscPublicClient();
-  const latestBlock = await client.getBlockNumber();
-
-  const cursor = await getListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID);
-  const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 100);
-  let fromBlock =
-    cursor?.lastBlock != null
-      ? cursor.lastBlock + 1n
-      : latestBlock > lookback
-        ? latestBlock - lookback
-        : 0n;
-
-  const maxBehind = BigInt(process.env.PAYMENT_LISTENER_MAX_BEHIND_BLOCKS ?? 120);
-  if (latestBlock > fromBlock && latestBlock - fromBlock > maxBehind) {
-    const jumpTo = latestBlock - lookback;
-    console.warn(
-      `[payment-listener] cursor ${fromBlock} is ${latestBlock - fromBlock} blocks behind — jumping to ${jumpTo}`
-    );
-    fromBlock = jumpTo > 0n ? jumpTo : 0n;
-    await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, fromBlock - 1n);
-  }
-
-  const recentWindow = BigInt(process.env.PAYMENT_LISTENER_RECENT_BLOCKS ?? 25);
-  if (latestBlock > recentWindow && fromBlock < latestBlock - recentWindow) {
-    fromBlock = latestBlock - recentWindow;
-  }
-
-  const maxBlocks = BigInt(options?.maxBlocks ?? 15);
-  const toBlock =
-    fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
-
-  if (fromBlock > toBlock) {
-    return { scanned: 0, matched: 0, latestBlock };
-  }
-
-  let matched = 0;
-  let scannedTo = fromBlock > 0n ? fromBlock - 1n : 0n;
-  const chunkSize = getLogChunkBlockSize();
-
-  for (let start = fromBlock; start <= toBlock; start += chunkSize) {
-    const end = start + chunkSize - 1n > toBlock ? toBlock : start + chunkSize - 1n;
-
-    try {
-      const logs = await fetchUsdtTransferLogs(client, {
-        fromBlock: start,
-        toBlock: end,
-        toAddresses: [receiving],
-      });
-
-      for (const log of logs) {
-        const transfer = decodeTransferLog(log);
-        if (!transfer) continue;
-        if (!addressesEqual(transfer.toAddress, receiving)) continue;
-
-        const processed = await isTransferProcessed(
-          prisma,
-          transfer.txHash,
-          transfer.logIndex
-        );
-        if (processed) continue;
-
-        const result = await processDetectedTransfer(transfer, options?.paymentOrderId);
-        if (result.matched) matched += 1;
-      }
-
-      scannedTo = end;
-      await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, scannedTo);
-    } catch (error) {
-      console.error("[payment-listener] checkout chunk failed:", error);
-      break;
-    }
-  }
-
-  return {
-    scanned: Number(scannedTo >= fromBlock ? scannedTo - fromBlock + 1n : 0n),
-    matched,
-    latestBlock,
-  };
-}
 
 export async function updatePaymentConfirmations(paymentOrderId?: string) {
   const receiving = getReceivingWallet();
