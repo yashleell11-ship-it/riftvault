@@ -13,6 +13,7 @@ import {
 import {
   createBscWalletClient,
   getTreasuryAccount,
+  getTreasuryAddressMismatch,
 } from "@/deposits/blockchain/wallet-client";
 import {
   getMaxSweepRetries,
@@ -27,6 +28,9 @@ export type SweepResult = {
   status: string;
   skipped?: boolean;
   error?: string;
+  gasFundingTxHash?: string | null;
+  sweepTxHash?: string | null;
+  gasRefundTxHash?: string | null;
 };
 
 async function waitForConfirmations(txHash: `0x${string}`, required: number) {
@@ -134,14 +138,18 @@ export async function claimDepositForSweep(depositId: string) {
 export async function sweepSingleDeposit(depositId: string): Promise<SweepResult> {
   const started = Date.now();
   const receiving = getReceivingWallet();
+  const mismatch = getTreasuryAddressMismatch();
   const treasury = getTreasuryAccount();
 
   if (!receiving || !treasury) {
-    return { depositId, status: "skipped", error: "Sweeper not configured" };
+    const error = mismatch ?? "Sweeper not configured (treasury account unavailable)";
+    logSweepEvent("Sweep skipped — config", { depositId, step: "config", error });
+    return { depositId, status: "skipped", error };
   }
 
   const deposit = await claimDepositForSweep(depositId);
   if (!deposit) {
+    logSweepEvent("Sweep skipped — claim failed", { depositId, step: "claim" });
     return { depositId, status: "skipped", skipped: true };
   }
 
@@ -165,8 +173,15 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
 
     const depositAccount = deriveDepositAccount(derivationIndex);
     if (depositAccount.address.toLowerCase() !== depositAddress) {
-      throw new Error("Derived address mismatch — check DEPOSIT_MNEMONIC");
+      throw new Error(
+        `Derived address ${depositAccount.address} does not match deposit toAddress ${depositAddress}`
+      );
     }
+    logSweepEvent("HD derivation verified", {
+      ...ctx,
+      step: "derive_verified",
+      depositAddress: depositAccount.address,
+    });
 
     const publicClient = getBscPublicClient();
     const depositWallet = createBscWalletClient(depositAccount);
@@ -205,7 +220,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           const fundAmount = gasCost - bnbBalance;
           logSweepEvent("Funding gas for USDT sweep", {
             ...ctx,
-            step: "fund_gas",
+            step: "gas_funding_started",
             gasSent: formatUnits(fundAmount, 18),
           });
 
@@ -223,6 +238,11 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
 
           ctx.gasFundingTxHash = gasFundingTxHash;
           ctx.gasSent = formatUnits(fundAmount, 18);
+          logSweepEvent("Gas funding tx submitted", {
+            ...ctx,
+            step: "gas_funding_tx_hash",
+            gasFundingTxHash,
+          });
 
           await waitForConfirmations(gasFundingTxHash, getSweepTxConfirmations());
           logSweepEvent("Gas funding confirmed", { ...ctx, step: "fund_gas_confirmed" });
@@ -252,9 +272,9 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           throw new Error("USDT sweep already in progress by another worker");
         }
       } else {
-      logSweepEvent("Sweeping USDT to treasury", {
+      logSweepEvent("USDT sweep started", {
         ...ctx,
-        step: "sweep_usdt",
+        step: "usdt_sweep_started",
         amount: formatUnits(currentUsdt, USDT_DECIMALS),
       });
 
@@ -272,6 +292,11 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         data: { sweepTxHash },
       });
       ctx.sweepTxHash = sweepTxHash;
+      logSweepEvent("USDT sweep tx submitted", {
+        ...ctx,
+        step: "usdt_sweep_tx_hash",
+        sweepTxHash,
+      });
       }
     }
 
@@ -310,9 +335,9 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           });
           gasRefundTxHash = refreshed?.gasRefundTxHash as `0x${string}` | null;
         } else {
-        logSweepEvent("Refunding leftover BNB to treasury", {
+        logSweepEvent("BNB refund started", {
           ...ctx,
-          step: "refund_bnb",
+          step: "bnb_refund_started",
           gasSent: formatUnits(refundAmount, 18),
         });
 
@@ -328,6 +353,11 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           data: { gasRefundTxHash },
         });
         ctx.gasRefundTxHash = gasRefundTxHash;
+        logSweepEvent("BNB refund tx submitted", {
+          ...ctx,
+          step: "bnb_refund_tx_hash",
+          gasRefundTxHash,
+        });
 
         await waitForConfirmations(gasRefundTxHash, getSweepTxConfirmations());
         logSweepEvent("BNB refund confirmed", { ...ctx, step: "refund_confirmed" });
@@ -351,11 +381,28 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     const durationMs = Date.now() - started;
     logSweepEvent("Sweep completed", { ...ctx, step: "completed", durationMs });
 
-    return { depositId, status: SWEEP_STATUS.COMPLETED };
+    const final = await prisma.cryptoDeposit.findUnique({
+      where: { id: depositId },
+      select: { gasFundingTxHash: true, sweepTxHash: true, gasRefundTxHash: true },
+    });
+
+    return {
+      depositId,
+      status: SWEEP_STATUS.COMPLETED,
+      gasFundingTxHash: final?.gasFundingTxHash,
+      sweepTxHash: final?.sweepTxHash,
+      gasRefundTxHash: final?.gasRefundTxHash,
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const stack = error instanceof Error ? error.stack : undefined;
     const durationMs = Date.now() - started;
-    logSweepEvent("Sweep failed", { ...ctx, step: "error", error: message, durationMs });
+    logSweepEvent("Sweep failed", {
+      ...ctx,
+      step: "error",
+      error: stack ? `${message}\n${stack}` : message,
+      durationMs,
+    });
     await markFailed(depositId, message);
     return { depositId, status: SWEEP_STATUS.FAILED, error: message };
   }

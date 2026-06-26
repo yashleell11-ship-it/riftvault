@@ -5,7 +5,8 @@ import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { readUsdtBalance } from "@/deposits/blockchain/erc20";
-import { SWEEP_STATUS, isDepositSweeperEnabled } from "@/deposits/sweeper/config";
+import { SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 
 export async function GET() {
   if (!(await requireAdmin())) {
@@ -60,8 +61,11 @@ export async function GET() {
     }),
   ]);
 
+  const diagnostics = await getSweeperDiagnostics();
+
   return NextResponse.json({
-    enabled: isDepositSweeperEnabled(),
+    enabled: diagnostics.enabled,
+    diagnostics,
     receivingWallet: receiving,
     treasury: { bnb: treasuryBnb, usdt: treasuryUsdt },
     counts: { pending, completed, failed, gasFunded, refunded },

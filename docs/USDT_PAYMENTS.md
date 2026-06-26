@@ -230,7 +230,7 @@ After a deposit is **confirmed** and the in-app wallet is credited, the sweeper 
 | Variable | Description |
 |----------|-------------|
 | `ENABLE_DEPOSIT_SWEEPER` | `true` to enable automatic sweeps |
-| `TREASURY_PRIVATE_KEY` | Private key for `RECEIVING_WALLET` (funds gas only — must match address) |
+| `TREASURY_PRIVATE_KEY` | Private key for `RECEIVING_WALLET` (funds gas only — **must derive to the same address**) |
 | `DEPOSIT_MNEMONIC` | Signs USDT + BNB refund from deposit addresses |
 | `SWEEPER_MAX_PER_TICK` | Deposits processed per cron tick (default `2`) |
 | `SWEEPER_MAX_RETRIES` | Failed sweep retries (default `5`) |
@@ -250,6 +250,7 @@ Deposit detection and wallet credit are unchanged — sweeper runs as a separate
 | Wrong amount | Must send **exact** `expectedAmount` from checkout |
 | Expired order | Create new checkout — orders expire after `PAYMENT_ORDER_EXPIRY_MINUTES` |
 | Wallet shows "Report deposit" instead of QR | Set `ENABLE_UNIQUE_DEPOSIT_ADDRESSES=true` and `DEPOSIT_MNEMONIC` (single line or multi-line 12/24 words), then redeploy |
+| Sweeper stuck on Pending | Open `/admin/sweeps` — if treasury key mismatch is shown, set `TREASURY_PRIVATE_KEY` to the key for `RECEIVING_WALLET`. Use **Run sweep now** to test without waiting for cron. |
 | Listener exits immediately | Run `vercel login`, then `npm run payments:listen` (remote mode). Deploy latest app so cron accepts Vercel CLI auth. |
 | BscScan link 404 on testnet | Use `testnet.bscscan.com` when `BSC_CHAIN_ID=97` |
 

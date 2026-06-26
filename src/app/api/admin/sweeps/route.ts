@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
-import { isDepositSweeperEnabled } from "@/deposits/sweeper/config";
+import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 
 const DEPOSIT_SELECT = {
   id: true,
@@ -72,8 +72,11 @@ export async function GET(request: Request) {
     select: DEPOSIT_SELECT,
   });
 
+  const diagnostics = await getSweeperDiagnostics();
+
   return NextResponse.json({
-    enabled: isDepositSweeperEnabled(),
+    enabled: diagnostics.enabled,
+    diagnostics,
     deposits,
   });
 }

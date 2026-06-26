@@ -1,7 +1,4 @@
-import { isEnvFlagEnabled } from "@/deposits/blockchain/config";
-import { getReceivingWallet } from "@/payments/blockchain/config";
-import { getDepositMnemonic } from "@/deposits/blockchain/config";
-import { getTreasuryPrivateKey } from "@/deposits/blockchain/wallet-client";
+import { isDepositSweeperEnabledSync } from "@/deposits/sweeper/diagnostics";
 
 export const SWEEP_STATUS = {
   PENDING: "pending",
@@ -16,12 +13,7 @@ export const SWEEP_STATUS = {
 export type SweepStatus = (typeof SWEEP_STATUS)[keyof typeof SWEEP_STATUS];
 
 export function isDepositSweeperEnabled(): boolean {
-  return (
-    isEnvFlagEnabled("ENABLE_DEPOSIT_SWEEPER") &&
-    Boolean(getDepositMnemonic()) &&
-    Boolean(getReceivingWallet()) &&
-    Boolean(getTreasuryPrivateKey())
-  );
+  return isDepositSweeperEnabledSync();
 }
 
 export function getMaxSweepsPerTick(): number {

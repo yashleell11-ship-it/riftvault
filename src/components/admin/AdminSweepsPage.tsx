@@ -10,6 +10,16 @@ import { cn } from "@/lib/utils";
 type Stats = {
   enabled: boolean;
   receivingWallet: string | null;
+  diagnostics?: {
+    enabled: boolean;
+    errors: string[];
+    checks: {
+      enableFlag: { raw: string | undefined; parsed: boolean };
+      treasuryDerivedAddress: string | null;
+      treasuryAddressMatch: boolean;
+      treasuryBnbBalance: string | null;
+    };
+  };
   treasury: { bnb: string; usdt: string };
   counts: {
     pending: number;
@@ -18,6 +28,25 @@ type Stats = {
     gasFunded: number;
     refunded: number;
   };
+};
+
+type RunResult = {
+  ok: boolean;
+  pendingFound: number;
+  gasFunded: number;
+  swept: number;
+  refunded: number;
+  durationMs: number;
+  errors: string[];
+  results: {
+    depositId: string;
+    status: string;
+    error?: string;
+    gasFundingTxHash?: string | null;
+    sweepTxHash?: string | null;
+    gasRefundTxHash?: string | null;
+  }[];
+  diagnostics?: Stats["diagnostics"];
 };
 
 type Deposit = {
@@ -70,6 +99,8 @@ export function AdminSweepsPage() {
   const [deposits, setDeposits] = useState<Deposit[]>([]);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]["key"]>("all");
   const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [runResult, setRunResult] = useState<RunResult | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -89,6 +120,16 @@ export function AdminSweepsPage() {
     load();
   }, [load]);
 
+  async function runSweepNow() {
+    setRunning(true);
+    setRunResult(null);
+    const res = await fetch("/api/admin/sweeps/run", { method: "POST" });
+    const data = await res.json();
+    setRunResult(data);
+    setRunning(false);
+    await load();
+  }
+
   return (
     <div className="max-w-5xl mx-auto">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -101,10 +142,15 @@ export function AdminSweepsPage() {
             Consolidates USDT from HD deposit addresses into RECEIVING_WALLET after wallet credit.
           </p>
         </div>
-        <Button size="sm" variant="secondary" onClick={load} disabled={loading}>
-          <RefreshCw className={cn("h-4 w-4 mr-1", loading && "animate-spin")} />
-          Refresh
-        </Button>
+        <div className="flex gap-2 shrink-0">
+          <Button size="sm" variant="secondary" onClick={load} disabled={loading}>
+            <RefreshCw className={cn("h-4 w-4 mr-1", loading && "animate-spin")} />
+            Refresh
+          </Button>
+          <Button size="sm" onClick={runSweepNow} disabled={running || loading}>
+            {running ? "Sweeping…" : "Run sweep now"}
+          </Button>
+        </div>
       </div>
 
       {stats && (
@@ -137,9 +183,40 @@ export function AdminSweepsPage() {
       )}
 
       {stats && !stats.enabled && (
-        <Card className="mb-4 border-amber-500/30 bg-amber-500/10 text-sm text-amber-200 px-4 py-3">
-          Sweeper disabled. Set ENABLE_DEPOSIT_SWEEPER=true, DEPOSIT_MNEMONIC, RECEIVING_WALLET, and
-          TREASURY_PRIVATE_KEY (must match RECEIVING_WALLET).
+        <Card className="mb-4 border-amber-500/30 bg-amber-500/10 text-sm text-amber-200 px-4 py-3 space-y-2">
+          <p>Sweeper is not ready. Fix the issues below in Vercel Production env, then redeploy.</p>
+          {stats.diagnostics?.errors.map((err) => (
+            <p key={err} className="font-mono text-xs text-amber-100">
+              • {err}
+            </p>
+          ))}
+          {stats.diagnostics?.checks.treasuryDerivedAddress && (
+            <p className="text-xs font-mono">
+              TREASURY_PRIVATE_KEY → {stats.diagnostics.checks.treasuryDerivedAddress}
+              <br />
+              RECEIVING_WALLET → {stats.receivingWallet}
+            </p>
+          )}
+        </Card>
+      )}
+
+      {runResult && (
+        <Card className="mb-4 border-accent/30 bg-accent/5 text-sm px-4 py-3 space-y-1">
+          <p className="font-medium">
+            Manual run {runResult.ok ? "succeeded" : "failed"} ({runResult.durationMs}ms)
+          </p>
+          <p className="text-xs text-text-muted">
+            pending={runResult.pendingFound} gasFunded={runResult.gasFunded} swept=
+            {runResult.swept} refunded={runResult.refunded}
+          </p>
+          {runResult.errors.map((e) => (
+            <p key={e} className="text-xs text-red-400 font-mono">
+              {e}
+            </p>
+          ))}
+          {runResult.results[0]?.sweepTxHash && (
+            <p className="text-xs font-mono">sweepTx: {runResult.results[0].sweepTxHash}</p>
+          )}
         </Card>
       )}
 

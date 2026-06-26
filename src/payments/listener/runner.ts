@@ -6,9 +6,13 @@ import {
   type UnifiedScanOptions,
 } from "@/payments/listener/unified-scanner";
 import { updateDepositConfirmations } from "@/deposits/services/confirm-deposit";
+import { runSweeperTick } from "@/deposits/sweeper/runner";
+import { isDepositSweeperEnabled } from "@/deposits/sweeper/config";
 
 export type PaymentListenerTickOptions = UnifiedScanOptions & {
   paymentOrderId?: string;
+  /** When false, skip treasury sweep even if enabled (rescan-only ticks). */
+  runSweeper?: boolean;
 };
 
 /** Single listener tick — checkout + wallet deposits, one blockchain cursor. */
@@ -20,6 +24,25 @@ export async function runPaymentListenerTick(options?: PaymentListenerTickOption
   await updatePaymentConfirmations(options?.paymentOrderId);
   await updateDepositConfirmations();
 
+  let sweep:
+    | {
+        pendingFound: number;
+        completed: number;
+        failed: number;
+        errors: string[];
+      }
+    | undefined;
+
+  if (options?.runSweeper !== false && isDepositSweeperEnabled()) {
+    const tick = await runSweeperTick();
+    sweep = {
+      pendingFound: tick.pendingFound,
+      completed: tick.completed,
+      failed: tick.failed,
+      errors: tick.errors,
+    };
+  }
+
   return {
     scanned: scan.scanned,
     matched: scan.matched,
@@ -27,6 +50,7 @@ export async function runPaymentListenerTick(options?: PaymentListenerTickOption
     latestBlock: scan.latestBlock,
     fromBlock: scan.fromBlock,
     toBlock: scan.toBlock,
+    sweep,
   };
 }
 
