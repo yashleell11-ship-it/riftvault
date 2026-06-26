@@ -34,18 +34,27 @@ export async function ensureUserDepositAddresses(userId: string) {
     const derivationIndex = await nextDerivationIndex();
     const address = deriveDepositAddress(derivationIndex).toLowerCase();
 
-    const row = await prisma.userDepositAddress.create({
-      data: {
-        userId,
-        chainKey: route.chainKey,
-        asset: route.asset,
-        address,
-        derivationIndex,
-      },
-    });
+    try {
+      const row = await prisma.userDepositAddress.create({
+        data: {
+          userId,
+          chainKey: route.chainKey,
+          asset: route.asset,
+          address,
+          derivationIndex,
+        },
+      });
 
-    created.push(row);
-    cachedAddressMap = null;
+      created.push(row);
+      cachedAddressMap = null;
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === "P2002") {
+        // Concurrent provision raced on derivationIndex or address — re-read existing row.
+        continue;
+      }
+      throw error;
+    }
   }
 
   return prisma.userDepositAddress.findMany({

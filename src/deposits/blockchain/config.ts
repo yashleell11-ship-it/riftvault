@@ -10,14 +10,36 @@ export const DEPOSIT_ROUTES = [
   { chainKey: DEPOSIT_BSC_CHAIN_KEY, asset: "USDT" as const },
 ] as const;
 
+/** Accept `true`, `TRUE`, `1`, and surrounding whitespace (common in Vercel env UI). */
+export function isEnvFlagEnabled(name: string): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  return raw === "true" || raw === "1";
+}
+
+/**
+ * Parse DEPOSIT_MNEMONIC from env — handles newlines, extra spaces, and wrapping quotes
+ * (Vercel often stores pasted mnemonics as multi-line secrets).
+ */
+export function parseDepositMnemonic(raw: string | undefined): string | null {
+  if (!raw) return null;
+
+  const stripped = raw.trim().replace(/^["']|["']$/g, "");
+  const words = stripped.split(/\s+/).filter(Boolean);
+  if (words.length < 12) return null;
+
+  return words.join(" ");
+}
+
 export function getDepositMnemonic(): string | null {
-  const mnemonic = process.env.DEPOSIT_MNEMONIC?.trim();
-  if (!mnemonic || mnemonic.split(" ").length < 12) return null;
-  return mnemonic;
+  return parseDepositMnemonic(process.env.DEPOSIT_MNEMONIC);
 }
 
 export function isDepositDerivationConfigured(): boolean {
   return Boolean(getDepositMnemonic());
+}
+
+export function isUniqueDepositAddressesEnabled(): boolean {
+  return isEnvFlagEnabled("ENABLE_UNIQUE_DEPOSIT_ADDRESSES") && isDepositDerivationConfigured();
 }
 
 export function getDepositRequiredConfirmations(): number {

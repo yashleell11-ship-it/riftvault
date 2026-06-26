@@ -37,6 +37,7 @@ type DepositInfo = {
   uniqueAddressesEnabled: boolean;
   uniqueAddressesComingSoon: boolean;
   addresses: DepositAddress[];
+  addressProvisionError?: string | null;
   recentDeposits: CryptoDeposit[];
 };
 
@@ -105,6 +106,7 @@ function DepositAddressCard({
 export function DepositPanel({ currency, onSuccess, onError }: Props) {
   const [info, setInfo] = useState<DepositInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [depositAmount, setDepositAmount] = useState("");
   const [reportAmount, setReportAmount] = useState("");
   const [reportCurrency, setReportCurrency] = useState<CurrencyCode>(getDefaultCurrency());
@@ -115,9 +117,24 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
 
   const load = useCallback(async (withScan = false) => {
     const url = withScan ? "/api/wallet/deposit-info?scan=1" : "/api/wallet/deposit-info";
-    const res = await fetch(url);
-    if (res.ok) setInfo(await res.json());
-    setLoading(false);
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        setInfo(await res.json());
+        setFetchError(null);
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setFetchError(
+          typeof data.error === "string"
+            ? data.error
+            : `Could not load deposit info (${res.status})`
+        );
+      }
+    } catch {
+      setFetchError("Could not reach the server. Check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -201,6 +218,8 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
   const demoMode = info?.demoDepositsEnabled ?? false;
   const uniqueMode = info?.uniqueAddressesEnabled ?? false;
   const hasAddresses = (info?.addresses.length ?? 0) > 0;
+  const provisionError = info?.addressProvisionError ?? null;
+  const showReportForm = Boolean(info) && !demoMode && !uniqueMode;
 
   return (
     <Card>
@@ -208,6 +227,12 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
         <ArrowDownLeft className="h-4 w-4 text-accent" />
         <h2 className="font-display font-semibold">Deposit crypto</h2>
       </div>
+
+      {fetchError && (
+        <p className="text-xs text-danger mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
+          {fetchError}
+        </p>
+      )}
 
       {uniqueMode && hasAddresses && (
         <div className="mb-4 space-y-3">
@@ -227,6 +252,19 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
             />
           ))}
         </div>
+      )}
+
+      {uniqueMode && !hasAddresses && !provisionError && (
+        <div className="mb-4 flex items-center justify-center gap-2 py-8 text-sm text-text-muted">
+          <Loader2 className="h-4 w-4 animate-spin text-accent" />
+          Generating your personal deposit address…
+        </div>
+      )}
+
+      {uniqueMode && provisionError && (
+        <p className="text-xs text-danger mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2">
+          {provisionError}
+        </p>
       )}
 
       {demoMode ? (
@@ -251,7 +289,7 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
           </form>
         </>
       ) : (
-        !uniqueMode && (
+        showReportForm && (
           <>
             <p className="text-xs text-text-muted mb-3">
               After sending crypto on-chain, submit the details. An admin confirms and credits your

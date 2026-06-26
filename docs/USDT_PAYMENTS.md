@@ -208,6 +208,7 @@ Users send USDT to their address on **Dashboard → Wallet**. The listener auto-
 | Payment not detected | Run `npm run payments:listen` or check RPC limits |
 | Wrong amount | Must send **exact** `expectedAmount` from checkout |
 | Expired order | Create new checkout — orders expire after `PAYMENT_ORDER_EXPIRY_MINUTES` |
+| Wallet shows "Report deposit" instead of QR | Set `ENABLE_UNIQUE_DEPOSIT_ADDRESSES=true` and `DEPOSIT_MNEMONIC` (single line or multi-line 12/24 words), then redeploy |
 | BscScan link 404 on testnet | Use `testnet.bscscan.com` when `BSC_CHAIN_ID=97` |
 
 ---
