@@ -7,6 +7,7 @@ import {
   getMinSweepUsdt,
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
+
 export function depositAddressEquals(address: string) {
   return { equals: address.toLowerCase(), mode: "insensitive" as const };
 }
@@ -33,14 +34,14 @@ type QueueRow = {
 };
 
 /**
- * Build sweep queue from DB + on-chain USDT (not DB amount alone).
- * One primary row per address that still holds USDT; finishable rows first.
+ * Build sweep queue from on-chain USDT per address (source of truth).
+ * One primary row per funded address; finishable rows (mid-sweep / empty) first.
  */
 export async function findDepositsToSweep(limit: number) {
   const rows = await prisma.cryptoDeposit.findMany({
     where: sweepQueueWhere(),
     orderBy: { createdAt: "asc" },
-    take: 300,
+    take: 500,
     select: {
       id: true,
       toAddress: true,
@@ -50,11 +51,29 @@ export async function findDepositsToSweep(limit: number) {
     },
   });
 
-  if (rows.length === 0) return [];
+  const hdRows = await prisma.userDepositAddress.findMany({
+    select: { address: true },
+  });
 
   const client = getBscPublicClient();
   const minWei = parseUnits(String(getMinSweepUsdt()), USDT_DECIMALS);
   const balanceCache = new Map<string, bigint>();
+  const rowsByAddress = new Map<string, QueueRow[]>();
+
+  for (const row of rows) {
+    if (!row.toAddress) continue;
+    const key = row.toAddress.toLowerCase();
+    const list = rowsByAddress.get(key) ?? [];
+    list.push(row);
+    rowsByAddress.set(key, list);
+  }
+
+  for (const { address } of hdRows) {
+    const key = address.toLowerCase();
+    if (!rowsByAddress.has(key)) {
+      rowsByAddress.set(key, []);
+    }
+  }
 
   async function usdtAt(address: string): Promise<bigint> {
     const key = address.toLowerCase();
@@ -68,35 +87,70 @@ export async function findDepositsToSweep(limit: number) {
   const finishable: QueueRow[] = [];
   const primaryByAddress = new Map<string, QueueRow>();
 
-  for (const row of rows) {
-    if (!row.toAddress) continue;
+  for (const [addr, addrRows] of rowsByAddress) {
+    const usdt = await usdtAt(addr);
 
-    if (row.sweepTxHash) {
-      finishable.push(row);
-      continue;
+    if (addrRows.length === 0 && usdt >= minWei) {
+      const linked = await prisma.cryptoDeposit.findFirst({
+        where: {
+          toAddress: depositAddressEquals(addr),
+          status: "confirmed",
+          walletTxId: { not: null },
+        },
+        orderBy: { createdAt: "asc" },
+        select: {
+          id: true,
+          toAddress: true,
+          sweepTxHash: true,
+          amount: true,
+          sweepStatus: true,
+        },
+      });
+      if (linked && linked.sweepStatus !== SWEEP_STATUS.COMPLETED) {
+        addrRows.push(linked);
+      }
     }
 
-    const usdt = await usdtAt(row.toAddress);
+    for (const row of addrRows) {
+      if (row.sweepTxHash) {
+        finishable.push(row);
+        continue;
+      }
+    }
 
     if (usdt === 0n) {
-      finishable.push(row);
+      for (const row of addrRows) {
+        if (!row.sweepTxHash) finishable.push(row);
+      }
       continue;
     }
 
-    if (usdt < minWei && row.amount < getMinSweepUsdt()) {
-      continue;
+    if (usdt < minWei) {
+      const hasMeaningful = addrRows.some((r) => r.amount >= getMinSweepUsdt());
+      if (!hasMeaningful) continue;
     }
 
-    const addr = row.toAddress.toLowerCase();
-    if (!primaryByAddress.has(addr)) {
-      primaryByAddress.set(addr, row);
+    const primary =
+      addrRows.find((r) => !r.sweepTxHash) ??
+      addrRows.find((r) => r.sweepStatus !== SWEEP_STATUS.COMPLETED) ??
+      addrRows[0];
+    if (primary && !primary.sweepTxHash) {
+      primaryByAddress.set(addr, primary);
     }
   }
 
   const needsSweep = [...primaryByAddress.values()];
   const ordered = [...finishable, ...needsSweep];
+  const seen = new Set<string>();
+  const deduped: QueueRow[] = [];
 
-  return ordered.slice(0, limit).map(({ id, sweepStatus }) => ({ id, sweepStatus }));
+  for (const row of ordered) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    deduped.push(row);
+  }
+
+  return deduped.slice(0, limit).map(({ id, sweepStatus }) => ({ id, sweepStatus }));
 }
 
 /** On-chain USDT balance per deposit address (for admin display). */

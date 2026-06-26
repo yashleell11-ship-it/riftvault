@@ -122,7 +122,7 @@ function ExplorerLink({
 }
 
 function aggregatedDrained(result: RunResult) {
-  return Boolean(result.drained) && (result.remainingPending ?? 0) === 0;
+  return Boolean(result.drained) && (result.remainingPending ?? 0) === 0 && (result.swept ?? 0) > 0;
 }
 
 function statusBadge(status: string | null, sweptAt: string | null, sweepTxHash: string | null) {

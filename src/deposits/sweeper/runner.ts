@@ -8,6 +8,10 @@ import {
 } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { backfillLegacyDepositsForSweeper } from "@/deposits/sweeper/backfill";
+import {
+  ensureOpenDepositsForFundedAddresses,
+  resetMiscompletedDepositsWithOnChainUsdt,
+} from "@/deposits/sweeper/reset-miscompleted";
 import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
 import {
   countDepositsToSweep,
@@ -154,6 +158,8 @@ export async function runSweeperTick(options?: {
     depositAddress: diagnostics.checks.receivingWallet ?? undefined,
   });
 
+  await resetMiscompletedDepositsWithOnChainUsdt();
+  await ensureOpenDepositsForFundedAddresses();
   await resetStaleSweepFailures();
   await backfillLegacyDepositsForSweeper();
   await completeBelowMinDeposits();
@@ -262,8 +268,10 @@ export async function runSweeperUntilDone(options?: {
   const maxWallMs = options?.maxWallMs ?? getSweepDrainMaxMs();
 
   await resetAllSweepFailures();
-  await resetStaleSweepFailures();
+  await resetMiscompletedDepositsWithOnChainUsdt();
+  await ensureOpenDepositsForFundedAddresses();
   await backfillLegacyDepositsForSweeper();
+  await resetStaleSweepFailures();
   await completeBelowMinDeposits();
   await reconcileSiblingDepositsAtEmptyAddresses();
 

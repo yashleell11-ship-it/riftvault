@@ -184,10 +184,33 @@ export async function backfillUserDepositAddresses(): Promise<number> {
 
     if (userRow) {
       if (userRow.address.toLowerCase() === addr) continue;
-      logSweepEvent("User has different deposit address — using scanned derivation index", {
+
+      const scanned = await findDerivationIndexForAddress(addr);
+      if (scanned == null) {
+        logSweepEvent("User has different deposit address — derivation scan failed", {
+          depositId: deposit.id,
+          step: "backfill_address_mismatch",
+          depositAddress: addr,
+        });
+        continue;
+      }
+
+      await prisma.userDepositAddress.update({
+        where: {
+          userId_chainKey_asset: {
+            userId: deposit.userId,
+            chainKey: deposit.chainKey,
+            asset: deposit.asset,
+          },
+        },
+        data: { address: addr, derivationIndex: scanned },
+      });
+      linked += 1;
+      logSweepEvent("Updated UserDepositAddress to match legacy deposit tx", {
         depositId: deposit.id,
-        step: "backfill_address_mismatch",
+        step: "backfill_address_update",
         depositAddress: addr,
+        amount: String(scanned),
       });
       continue;
     }

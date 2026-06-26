@@ -60,22 +60,6 @@ export async function reconcileSiblingDepositsAtEmptyAddresses(): Promise<number
     });
 
     if (!reference?.sweepTxHash && reference?.sweepStatus !== SWEEP_STATUS.COMPLETED) {
-      for (const deposit of deposits) {
-        await prisma.cryptoDeposit.update({
-          where: { id: deposit.id },
-          data: {
-            sweepStatus: SWEEP_STATUS.COMPLETED,
-            sweepError: null,
-            sweptAt: deposit.sweptAt ?? new Date(),
-          },
-        });
-        reconciled += 1;
-        logSweepEvent("Deposit auto-completed — address empty, no sweep tx", {
-          depositId: deposit.id,
-          step: "reconcile_empty_no_tx",
-          depositAddress: addr,
-        });
-      }
       continue;
     }
 
