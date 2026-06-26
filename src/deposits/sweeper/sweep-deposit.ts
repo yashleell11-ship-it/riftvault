@@ -4,17 +4,20 @@ import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { getUsdtTokenAddress, USDT_DECIMALS } from "@/payments/blockchain/usdt-bep20";
 import { deriveDepositAccount } from "@/deposits/blockchain/derive-account";
-import { ERC20_TRANSFER_ABI, readUsdtBalance } from "@/deposits/blockchain/erc20";
+import { readUsdtBalance } from "@/deposits/blockchain/erc20";
 import {
   estimateNativeTransferGas,
   estimateUsdtTransferGas,
   refundableBnbAmount,
 } from "@/deposits/blockchain/gas";
 import {
-  createBscWalletClient,
   getTreasuryAccount,
   getTreasuryAddressMismatch,
 } from "@/deposits/blockchain/wallet-client";
+import {
+  sendSignedErc20Transfer,
+  sendSignedTransaction,
+} from "@/deposits/blockchain/send-signed";
 import {
   getMaxSweepRetries,
   getMinBnbRefundWei,
@@ -184,10 +187,8 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     });
 
     const publicClient = getBscPublicClient();
-    const depositWallet = createBscWalletClient(depositAccount);
-    const treasuryWallet = createBscWalletClient(treasury);
 
-    logSweepEvent("Local signing clients ready", {
+    logSweepEvent("Local signing ready (sendRawTransaction only)", {
       ...ctx,
       step: "wallet_clients",
       depositAddress: depositAccount.address,
@@ -230,11 +231,9 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
             gasSent: formatUnits(fundAmount, 18),
           });
 
-          gasFundingTxHash = await treasuryWallet.sendTransaction({
-            account: treasury,
+          gasFundingTxHash = await sendSignedTransaction(treasury, {
             to: depositAddress,
             value: fundAmount,
-            chain: treasuryWallet.chain,
           });
 
           await prisma.cryptoDeposit.update({
@@ -284,14 +283,12 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         amount: formatUnits(currentUsdt, USDT_DECIMALS),
       });
 
-      sweepTxHash = await depositWallet.writeContract({
-        address: getUsdtTokenAddress(),
-        abi: ERC20_TRANSFER_ABI,
-        functionName: "transfer",
-        args: [receiving, currentUsdt],
-        account: depositAccount,
-        chain: depositWallet.chain,
-      });
+      sweepTxHash = await sendSignedErc20Transfer(
+        depositAccount,
+        getUsdtTokenAddress(),
+        receiving,
+        currentUsdt
+      );
 
       await prisma.cryptoDeposit.update({
         where: { id: depositId },
@@ -347,11 +344,9 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           gasSent: formatUnits(refundAmount, 18),
         });
 
-        gasRefundTxHash = await depositWallet.sendTransaction({
-          account: depositAccount,
+        gasRefundTxHash = await sendSignedTransaction(depositAccount, {
           to: receiving,
           value: refundAmount,
-          chain: depositWallet.chain,
         });
 
         await prisma.cryptoDeposit.update({

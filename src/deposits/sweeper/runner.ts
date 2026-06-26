@@ -31,6 +31,33 @@ export type SweeperTickResult = {
 };
 
 /** Find confirmed, credited deposits that still need on-chain consolidation. */
+export async function resetStaleSendTransactionFailures() {
+  const reset = await prisma.cryptoDeposit.updateMany({
+    where: {
+      status: "confirmed",
+      walletTxId: { not: null },
+      sweepStatus: SWEEP_STATUS.FAILED,
+      sweepError: { contains: "eth_sendTransaction" },
+    },
+    data: {
+      sweepStatus: SWEEP_STATUS.PENDING,
+      retryCount: 0,
+      sweepError: null,
+    },
+  });
+
+  if (reset.count > 0) {
+    logSweepEvent("Reset stale eth_sendTransaction sweep failures", {
+      depositId: "—",
+      step: "reset_stale_failures",
+      amount: String(reset.count),
+    });
+  }
+
+  return reset.count;
+}
+
+/** Find confirmed, credited deposits that still need on-chain consolidation. */
 export async function findDepositsToSweep(limit: number) {
   const maxRetries = getMaxSweepRetries();
 
@@ -93,6 +120,8 @@ export async function runSweeperTick(options?: {
     step: "env_validation",
     depositAddress: diagnostics.checks.receivingWallet ?? undefined,
   });
+
+  await resetStaleSendTransactionFailures();
 
   const limit = options?.limit ?? getMaxSweepsPerTick();
   const pending = await findDepositsToSweep(limit);
