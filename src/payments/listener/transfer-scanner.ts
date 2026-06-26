@@ -7,6 +7,7 @@ import { addressesEqual } from "@/payments/blockchain/amounts";
 import {
   decodeTransferLog,
   fetchUsdtTransferLogs,
+  getLogChunkBlockSize,
 } from "@/payments/blockchain/log-scanner";
 import {
   getListenerCursor,
@@ -47,7 +48,7 @@ export async function scanUsdtTransfers(options?: {
         ? latestBlock - lookback
         : 0n;
 
-  const maxBlocks = BigInt(options?.maxBlocks ?? 30);
+  const maxBlocks = BigInt(options?.maxBlocks ?? 15);
   const toBlock =
     fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
 
@@ -55,34 +56,46 @@ export async function scanUsdtTransfers(options?: {
     return { scanned: 0, matched: 0, latestBlock };
   }
 
-  const logs = await fetchUsdtTransferLogs(client, {
-    fromBlock,
-    toBlock,
-    toAddresses: [receiving],
-  });
-
   let matched = 0;
+  let scannedTo = fromBlock > 0n ? fromBlock - 1n : 0n;
+  const chunkSize = getLogChunkBlockSize();
 
-  for (const log of logs) {
-    const transfer = decodeTransferLog(log);
-    if (!transfer) continue;
-    if (!addressesEqual(transfer.toAddress, receiving)) continue;
+  for (let start = fromBlock; start <= toBlock; start += chunkSize) {
+    const end = start + chunkSize - 1n > toBlock ? toBlock : start + chunkSize - 1n;
 
-    const processed = await isTransferProcessed(
-      prisma,
-      transfer.txHash,
-      transfer.logIndex
-    );
-    if (processed) continue;
+    try {
+      const logs = await fetchUsdtTransferLogs(client, {
+        fromBlock: start,
+        toBlock: end,
+        toAddresses: [receiving],
+      });
 
-    const result = await processDetectedTransfer(transfer, options?.paymentOrderId);
-    if (result.matched) matched += 1;
+      for (const log of logs) {
+        const transfer = decodeTransferLog(log);
+        if (!transfer) continue;
+        if (!addressesEqual(transfer.toAddress, receiving)) continue;
+
+        const processed = await isTransferProcessed(
+          prisma,
+          transfer.txHash,
+          transfer.logIndex
+        );
+        if (processed) continue;
+
+        const result = await processDetectedTransfer(transfer, options?.paymentOrderId);
+        if (result.matched) matched += 1;
+      }
+
+      scannedTo = end;
+      await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, scannedTo);
+    } catch (error) {
+      console.error("[payment-listener] checkout chunk failed:", error);
+      break;
+    }
   }
 
-  await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, toBlock);
-
   return {
-    scanned: Number(toBlock - fromBlock + 1n),
+    scanned: Number(scannedTo >= fromBlock ? scannedTo - fromBlock + 1n : 0n),
     matched,
     latestBlock,
   };

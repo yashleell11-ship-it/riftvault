@@ -22,9 +22,9 @@ function buildTransports() {
   const unique = [...new Set(urls)];
   return unique.map((url) =>
     http(url, {
-      timeout: 30_000,
-      retryCount: 2,
-      retryDelay: 1_000,
+      timeout: 8_000,
+      retryCount: 1,
+      retryDelay: 400,
     })
   );
 }

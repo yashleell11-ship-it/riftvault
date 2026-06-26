@@ -1,12 +1,14 @@
 import type { Log, PublicClient } from "viem";
 import { ERC20_TRANSFER_EVENT, getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 
-/** Max blocks per eth_getLogs call (BSC public RPCs often cap ~10–50). */
+/** Max blocks per eth_getLogs call (BSC public RPCs often cap ~5–20). */
 export function getLogChunkBlockSize(): bigint {
-  const n = Number(process.env.BSC_LOG_CHUNK_BLOCKS ?? 15);
-  const size = Number.isFinite(n) && n > 0 ? Math.floor(n) : 15;
-  return BigInt(Math.min(100, Math.max(1, size)));
+  const n = Number(process.env.BSC_LOG_CHUNK_BLOCKS ?? 10);
+  const size = Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
+  return BigInt(Math.min(50, Math.max(1, size)));
 }
+
+const MAX_SPLIT_DEPTH = 8;
 
 type TransferLogQuery = {
   fromBlock: bigint;
@@ -18,9 +20,64 @@ type TransferLogQuery = {
 function isRpcLimitError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as { code?: number }).code;
-  if (code === -32005) return true;
+  if (code === -32005 || code === -32602) return true;
   const message = String((error as Error).message ?? "").toLowerCase();
-  return message.includes("limit exceeded") || message.includes("exceeds defined limit");
+  return (
+    message.includes("limit exceeded") ||
+    message.includes("exceeds defined limit") ||
+    message.includes("timeout") ||
+    message.includes("rate limit")
+  );
+}
+
+async function getLogsWithSplit(
+  client: PublicClient,
+  token: `0x${string}`,
+  to: `0x${string}`,
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<Log[]> {
+  const pending: { from: bigint; to: bigint; depth: number }[] = [
+    { from: fromBlock, to: toBlock, depth: 0 },
+  ];
+  const logs: Log[] = [];
+
+  while (pending.length > 0) {
+    const range = pending.pop()!;
+    try {
+      const chunk = await client.getLogs({
+        address: token,
+        event: ERC20_TRANSFER_EVENT,
+        args: { to },
+        fromBlock: range.from,
+        toBlock: range.to,
+      });
+      logs.push(...chunk);
+    } catch (error) {
+      if (
+        isRpcLimitError(error) &&
+        range.from < range.to &&
+        range.depth < MAX_SPLIT_DEPTH
+      ) {
+        const mid = range.from + (range.to - range.from) / 2n;
+        pending.push({ from: mid + 1n, to: range.to, depth: range.depth + 1 });
+        pending.push({ from: range.from, to: mid, depth: range.depth + 1 });
+        continue;
+      }
+
+      if (isRpcLimitError(error)) {
+        console.warn(
+          `[log-scanner] skipping blocks ${range.from}-${range.to} for ${to}:`,
+          error instanceof Error ? error.message : error
+        );
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  return logs;
 }
 
 /**
@@ -49,29 +106,8 @@ export async function fetchUsdtTransferLogs(
     const end = start + chunkSize - 1n > toBlock ? toBlock : start + chunkSize - 1n;
 
     for (const to of uniqueTo) {
-      const pending: { from: bigint; to: bigint }[] = [{ from: start, to: end }];
-
-      while (pending.length > 0) {
-        const range = pending.pop()!;
-        try {
-          const logs = await client.getLogs({
-            address: token,
-            event: ERC20_TRANSFER_EVENT,
-            args: { to },
-            fromBlock: range.from,
-            toBlock: range.to,
-          });
-          allLogs.push(...logs);
-        } catch (error) {
-          if (isRpcLimitError(error) && range.from < range.to) {
-            const mid = range.from + (range.to - range.from) / 2n;
-            pending.push({ from: mid + 1n, to: range.to });
-            pending.push({ from: range.from, to: mid });
-          } else {
-            throw error;
-          }
-        }
-      }
+      const logs = await getLogsWithSplit(client, token, to, start, end);
+      allLogs.push(...logs);
     }
   }
 
