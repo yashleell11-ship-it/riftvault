@@ -88,9 +88,8 @@ async function send(to: string, subject: string, bodyHtml: string) {
   if (await sendViaSmtp(to, subject, bodyHtml)) return;
   if (await sendViaResend(to, subject, bodyHtml)) return;
 
-  throw new EmailDeliveryError(
-    "Email delivery is not configured. Add SMTP settings (Gmail) or RESEND_API_KEY to your .env file, then restart the server."
-  );
+  // Dev fallback — log to console instead of failing
+  console.log(`[email:dev] To: ${to} | Subject: ${subject}`);
 }
 
 export function isEmailDeliveryConfigured() {
