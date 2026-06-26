@@ -16,15 +16,6 @@ export function sweepQueueWhere() {
     status: "confirmed" as const,
     walletTxId: { not: null },
     NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
-    OR: [
-      { sweepStatus: null },
-      { sweepStatus: SWEEP_STATUS.PENDING },
-      { sweepStatus: SWEEP_STATUS.FAILED },
-      { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
-      { sweepStatus: SWEEP_STATUS.SWEEPING },
-      { sweepStatus: SWEEP_STATUS.SWEPT },
-      { sweepStatus: SWEEP_STATUS.REFUNDING },
-    ],
   };
 }
 

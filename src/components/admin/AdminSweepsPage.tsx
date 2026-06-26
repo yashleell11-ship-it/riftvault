@@ -23,6 +23,7 @@ type Stats = {
   treasury: { bnb: string; usdt: string };
   counts: {
     pending: number;
+    queueReady?: number;
     completed: number;
     failed: number;
     gasFunded: number;
@@ -119,19 +120,20 @@ function aggregatedDrained(result: RunResult) {
 }
 
 function statusBadge(status: string | null, sweptAt: string | null, sweepTxHash: string | null) {
-  if (status === "completed") {
+  const normalized = status?.trim() || null;
+  if (normalized === "completed") {
     return <Badge variant="accent">Completed</Badge>;
   }
-  if (status === "failed") {
+  if (normalized === "failed") {
     return <Badge variant="danger">Failed</Badge>;
   }
   if (sweepTxHash && sweptAt) {
     return <Badge variant="accent">Swept (finishing)</Badge>;
   }
-  if (!status || status === "pending") {
+  if (!normalized || normalized === "pending") {
     return <Badge variant="default">Pending</Badge>;
   }
-  return <Badge variant="default">{status}</Badge>;
+  return <Badge variant="default">{normalized}</Badge>;
 }
 
 export function AdminSweepsPage() {
@@ -336,6 +338,11 @@ export function AdminSweepsPage() {
               <Clock className="h-3.5 w-3.5" /> Pending sweeps
             </div>
             <p className="font-semibold">{stats.counts.pending}</p>
+            {stats.counts.queueReady != null && stats.counts.queueReady !== stats.counts.pending && (
+              <p className="text-[10px] text-text-muted mt-0.5">
+                {stats.counts.queueReady} in sweep queue
+              </p>
+            )}
           </Card>
           <Card className="p-4">
             <div className="flex items-center gap-2 text-text-muted text-xs mb-1">

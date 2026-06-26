@@ -43,14 +43,6 @@ export async function GET(request: Request) {
     where = {
       ...baseWhere,
       NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
-      OR: [
-        { sweepStatus: null },
-        { sweepStatus: SWEEP_STATUS.PENDING },
-        { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
-        { sweepStatus: SWEEP_STATUS.SWEEPING },
-        { sweepStatus: SWEEP_STATUS.SWEPT },
-        { sweepStatus: SWEEP_STATUS.REFUNDING },
-      ],
     };
   } else if (filter === "completed") {
     where = { ...baseWhere, sweepStatus: SWEEP_STATUS.COMPLETED };
