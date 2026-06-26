@@ -30,7 +30,11 @@ export async function GET(request: Request) {
     shouldRunThrottledScan(`deposit:${user.id}`, SCAN_INTERVAL_MS)
   ) {
     try {
-      await scanUserDepositTransfers({ maxBlocks: 80 });
+      const userAddresses = await ensureUserDepositAddresses(user.id);
+      const onlyAddresses = userAddresses.map(
+        (row) => row.address as `0x${string}`
+      );
+      await scanUserDepositTransfers({ maxBlocks: 40, onlyAddresses });
     } catch (error) {
       console.error("[deposit-info] scan:", error);
     }

@@ -36,7 +36,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await runPaymentListenerTick({ maxBlocks: 30 });
+    const result = await runPaymentListenerTick({ maxBlocks: 25, skipDeposits: true });
     return NextResponse.json({ ok: true, ...result, scanned: result.scanned });
   } catch (error) {
     const details = serializeError(error);

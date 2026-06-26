@@ -19,7 +19,11 @@ import {
 import { uniqueDepositAddressesEnabled } from "@/lib/env";
 
 /** Scan BSC USDT transfers to unique user deposit addresses. */
-export async function scanUserDepositTransfers(options?: { maxBlocks?: number }) {
+export async function scanUserDepositTransfers(options?: {
+  maxBlocks?: number;
+  /** When set, only scan these deposit addresses (e.g. current user on wallet page). */
+  onlyAddresses?: `0x${string}`[];
+}) {
   if (!uniqueDepositAddressesEnabled()) {
     return { scanned: 0, matched: 0 };
   }
@@ -52,9 +56,16 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
 
   const depositAddresses = [...addressMap.keys()].sort() as `0x${string}`[];
   const receiving = getReceivingWallet()?.toLowerCase();
-  const scanAddresses = receiving
+  let scanAddresses = receiving
     ? depositAddresses.filter((addr) => !addressesEqual(addr, receiving))
     : depositAddresses;
+
+  if (options?.onlyAddresses?.length) {
+    const allowed = new Set(
+      options.onlyAddresses.map((a) => a.toLowerCase())
+    );
+    scanAddresses = scanAddresses.filter((addr) => allowed.has(addr));
+  }
 
   if (scanAddresses.length === 0) {
     await setListenerCursor(prisma, DEPOSIT_LISTENER_STATE_ID, toBlock);
@@ -62,10 +73,17 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
     return { scanned: Number(toBlock - fromBlock + 1n), matched: 0 };
   }
 
-  const maxAddresses = getDepositScanMaxAddressesPerTick();
-  const rotation = await getListenerCursor(prisma, DEPOSIT_ADDRESS_ROTATION_STATE_ID);
+  const maxAddresses = options?.onlyAddresses?.length
+    ? scanAddresses.length
+    : getDepositScanMaxAddressesPerTick();
+  const useRotation = !options?.onlyAddresses?.length && scanAddresses.length > maxAddresses;
+  const rotation = useRotation
+    ? await getListenerCursor(prisma, DEPOSIT_ADDRESS_ROTATION_STATE_ID)
+    : null;
   const offset =
-    scanAddresses.length > 0 ? Number(rotation?.lastBlock ?? 0n) % scanAddresses.length : 0;
+    useRotation && scanAddresses.length > 0
+      ? Number(rotation?.lastBlock ?? 0n) % scanAddresses.length
+      : 0;
   const count = Math.min(maxAddresses, scanAddresses.length);
   const addressesThisTick: `0x${string}`[] = [];
   for (let i = 0; i < count; i++) {
@@ -73,7 +91,7 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
   }
   const nextOffset = (offset + count) % scanAddresses.length;
   const completedAddressRotation =
-    count >= scanAddresses.length || nextOffset === 0;
+    !useRotation || count >= scanAddresses.length || nextOffset === 0;
 
   const logs = await fetchUsdtTransferLogs(client, {
     fromBlock,
@@ -125,7 +143,9 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
     matched += 1;
   }
 
-  await setListenerCursor(prisma, DEPOSIT_ADDRESS_ROTATION_STATE_ID, BigInt(nextOffset));
+  if (useRotation) {
+    await setListenerCursor(prisma, DEPOSIT_ADDRESS_ROTATION_STATE_ID, BigInt(nextOffset));
+  }
   if (completedAddressRotation) {
     await setListenerCursor(prisma, DEPOSIT_LISTENER_STATE_ID, toBlock);
   }
