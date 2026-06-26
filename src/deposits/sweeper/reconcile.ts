@@ -5,9 +5,47 @@ import { depositAddressEquals } from "@/deposits/sweeper/queue";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
+type SweepReference = {
+  sweepTxHash: string | null;
+  gasFundingTxHash: string | null;
+  sweptAt: Date | null;
+};
+
+async function findSweepReference(addr: string): Promise<SweepReference | null> {
+  const withTx = await prisma.cryptoDeposit.findFirst({
+    where: {
+      toAddress: depositAddressEquals(addr),
+      status: "confirmed",
+      sweepTxHash: { not: null },
+    },
+    orderBy: [{ sweptAt: "desc" }, { updatedAt: "desc" }],
+    select: {
+      sweepTxHash: true,
+      gasFundingTxHash: true,
+      sweptAt: true,
+    },
+  });
+  if (withTx) return withTx;
+
+  const completed = await prisma.cryptoDeposit.findFirst({
+    where: {
+      toAddress: depositAddressEquals(addr),
+      status: "confirmed",
+      sweepStatus: SWEEP_STATUS.COMPLETED,
+    },
+    orderBy: [{ sweptAt: "desc" }, { updatedAt: "desc" }],
+    select: {
+      sweepTxHash: true,
+      gasFundingTxHash: true,
+      sweptAt: true,
+    },
+  });
+  return completed;
+}
+
 /**
- * When an HD address has no USDT left (already swept), mark every sibling
- * deposit row at that address completed — no new on-chain txs.
+ * When an HD address has no USDT left (already swept), mark every open
+ * deposit row at that address completed — copies sibling sweep tx when available.
  */
 export async function reconcileSiblingDepositsAtEmptyAddresses(): Promise<number> {
   const client = getBscPublicClient();
@@ -39,29 +77,20 @@ export async function reconcileSiblingDepositsAtEmptyAddresses(): Promise<number
   }
 
   let reconciled = 0;
+  const balanceCache = new Map<string, bigint>();
+  const referenceCache = new Map<string, SweepReference | null>();
 
   for (const [addr, deposits] of byAddress) {
-    const { usdt } = await readAddressBalances(client, addr as `0x${string}`);
-    if (usdt > 0n) continue;
-
-    const reference = await prisma.cryptoDeposit.findFirst({
-      where: {
-        toAddress: depositAddressEquals(addr),
-        status: "confirmed",
-        OR: [{ sweepTxHash: { not: null } }, { sweepStatus: SWEEP_STATUS.COMPLETED }],
-      },
-      orderBy: { sweptAt: "desc" },
-      select: {
-        sweepTxHash: true,
-        gasFundingTxHash: true,
-        sweptAt: true,
-        sweepStatus: true,
-      },
-    });
-
-    if (!reference?.sweepTxHash && reference?.sweepStatus !== SWEEP_STATUS.COMPLETED) {
-      continue;
+    if (!balanceCache.has(addr)) {
+      const { usdt } = await readAddressBalances(client, addr as `0x${string}`);
+      balanceCache.set(addr, usdt);
     }
+    if ((balanceCache.get(addr) ?? 0n) > 0n) continue;
+
+    if (!referenceCache.has(addr)) {
+      referenceCache.set(addr, await findSweepReference(addr));
+    }
+    const reference = referenceCache.get(addr);
 
     for (const deposit of deposits) {
       await prisma.cryptoDeposit.update({
@@ -69,19 +98,24 @@ export async function reconcileSiblingDepositsAtEmptyAddresses(): Promise<number
         data: {
           sweepStatus: SWEEP_STATUS.COMPLETED,
           sweepError: null,
-          sweepTxHash: deposit.sweepTxHash ?? reference?.sweepTxHash,
-          gasFundingTxHash: deposit.gasFundingTxHash ?? reference?.gasFundingTxHash,
+          sweepTxHash: deposit.sweepTxHash ?? reference?.sweepTxHash ?? null,
+          gasFundingTxHash: deposit.gasFundingTxHash ?? reference?.gasFundingTxHash ?? null,
           sweptAt: deposit.sweptAt ?? reference?.sweptAt ?? new Date(),
         },
       });
       reconciled += 1;
 
-      logSweepEvent("Sibling deposit auto-completed (address empty)", {
-        depositId: deposit.id,
-        step: "reconcile_sibling",
-        depositAddress: addr,
-        sweepTxHash: reference?.sweepTxHash ?? undefined,
-      });
+      logSweepEvent(
+        reference?.sweepTxHash
+          ? "Sibling deposit auto-completed (address empty)"
+          : "Deposit auto-completed — address empty, no USDT on-chain",
+        {
+          depositId: deposit.id,
+          step: reference?.sweepTxHash ? "reconcile_sibling" : "reconcile_empty",
+          depositAddress: addr,
+          sweepTxHash: reference?.sweepTxHash ?? undefined,
+        }
+      );
     }
   }
 

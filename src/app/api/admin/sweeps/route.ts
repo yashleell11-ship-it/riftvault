@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { readOnChainUsdtByAddress } from "@/deposits/sweeper/queue";
+import { reconcileSiblingDepositsAtEmptyAddresses } from "@/deposits/sweeper/reconcile";
 
 const DEPOSIT_SELECT = {
   id: true,
@@ -31,6 +32,8 @@ export async function GET(request: Request) {
 
   const { searchParams } = new URL(request.url);
   const filter = searchParams.get("filter") ?? "all";
+
+  await reconcileSiblingDepositsAtEmptyAddresses();
 
   const baseWhere = {
     status: "confirmed" as const,
