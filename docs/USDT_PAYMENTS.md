@@ -146,6 +146,24 @@ npm run payments:listen
 
 This is more reliable than cron-only on serverless.
 
+#### Running the listener on your machine
+
+Vercel **encrypts** production environment variables. `vercel env pull` writes the keys to `.env.production.local` but leaves **empty values** for encrypted secrets — the listener cannot read them from that file.
+
+Create **`.env.payments.local`** in the project root (gitignored) with the real values:
+
+```env
+DATABASE_URL="postgresql://..."
+RECEIVING_WALLET="0x..."
+BSC_RPC_URL="https://bsc-dataseed.binance.org"
+BSC_CHAIN_ID="56"
+ENABLE_UNIQUE_DEPOSIT_ADDRESSES="true"
+DEPOSIT_MNEMONIC="word1 word2 ... word12"
+PAYMENT_CONFIRMATIONS="12"
+```
+
+Copy each value from **Vercel → Project → Settings → Environment Variables** (click the eye icon). Then run `npm run payments:listen` again.
+
 ### Vercel cron fallback
 
 `vercel.json` includes:
@@ -209,7 +227,7 @@ Users send USDT to their address on **Dashboard → Wallet**. The listener auto-
 | Wrong amount | Must send **exact** `expectedAmount` from checkout |
 | Expired order | Create new checkout — orders expire after `PAYMENT_ORDER_EXPIRY_MINUTES` |
 | Wallet shows "Report deposit" instead of QR | Set `ENABLE_UNIQUE_DEPOSIT_ADDRESSES=true` and `DEPOSIT_MNEMONIC` (single line or multi-line 12/24 words), then redeploy |
-| Listener exits immediately | `npm run payments:listen` loads `.env.production.local` via `@next/env`; ensure values are non-empty (re-run `vercel env pull` or copy from Vercel dashboard) |
+| Listener exits immediately | Encrypted Vercel secrets are empty after `env pull` — create `.env.payments.local` with real values (see **Running the listener on your machine** above) |
 | BscScan link 404 on testnet | Use `testnet.bscscan.com` when `BSC_CHAIN_ID=97` |
 
 ---
