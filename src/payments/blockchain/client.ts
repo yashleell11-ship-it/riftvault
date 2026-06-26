@@ -4,11 +4,7 @@ import { getBscChainId, getBscRpcUrl } from "@/payments/blockchain/config";
 
 let cachedClient: PublicClient | null = null;
 
-const FALLBACK_BSC_RPCS = [
-  "https://bsc.publicnode.com",
-  "https://bsc-dataseed.binance.org",
-  "https://bsc-dataseed2.binance.org",
-] as const;
+const FALLBACK_BSC_RPCS = ["https://bsc.publicnode.com"] as const;
 
 function buildTransports() {
   const primary = getBscRpcUrl();
@@ -19,7 +15,10 @@ function buildTransports() {
       (url) => url !== primary && url !== "https://bsc.publicnode.com"
     ),
   ];
-  const unique = [...new Set(urls)];
+  const unique = [...new Set(urls)].filter(
+    (url) => !url.includes("bsc-dataseed")
+  );
+  if (unique.length === 0) unique.push("https://bsc.publicnode.com");
   return unique.map((url) =>
     http(url, {
       timeout: 8_000,

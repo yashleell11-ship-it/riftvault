@@ -8,7 +8,7 @@ export function getLogChunkBlockSize(): bigint {
   return BigInt(Math.min(50, Math.max(1, size)));
 }
 
-const MAX_SPLIT_DEPTH = 8;
+const MAX_RPC_ATTEMPTS_PER_ADDRESS = 12;
 
 type TransferLogQuery = {
   fromBlock: bigint;
@@ -41,8 +41,16 @@ async function getLogsWithSplit(
     { from: fromBlock, to: toBlock, depth: 0 },
   ];
   const logs: Log[] = [];
+  let attempts = 0;
 
   while (pending.length > 0) {
+    if (attempts >= MAX_RPC_ATTEMPTS_PER_ADDRESS) {
+      console.warn(
+        `[log-scanner] RPC budget exhausted for ${to} blocks ${fromBlock}-${toBlock}`
+      );
+      break;
+    }
+    attempts += 1;
     const range = pending.pop()!;
     try {
       const chunk = await client.getLogs({
@@ -57,7 +65,7 @@ async function getLogsWithSplit(
       if (
         isRpcLimitError(error) &&
         range.from < range.to &&
-        range.depth < MAX_SPLIT_DEPTH
+        range.depth < 4
       ) {
         const mid = range.from + (range.to - range.from) / 2n;
         pending.push({ from: mid + 1n, to: range.to, depth: range.depth + 1 });

@@ -40,13 +40,23 @@ export async function scanUsdtTransfers(options?: {
   const latestBlock = await client.getBlockNumber();
 
   const cursor = await getListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID);
-  const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 2_000);
-  const fromBlock =
+  const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 100);
+  let fromBlock =
     cursor?.lastBlock != null
       ? cursor.lastBlock + 1n
       : latestBlock > lookback
         ? latestBlock - lookback
         : 0n;
+
+  const maxBehind = BigInt(process.env.PAYMENT_LISTENER_MAX_BEHIND_BLOCKS ?? 120);
+  if (latestBlock > fromBlock && latestBlock - fromBlock > maxBehind) {
+    const jumpTo = latestBlock - lookback;
+    console.warn(
+      `[payment-listener] cursor ${fromBlock} is ${latestBlock - fromBlock} blocks behind — jumping to ${jumpTo}`
+    );
+    fromBlock = jumpTo > 0n ? jumpTo : 0n;
+    await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, fromBlock - 1n);
+  }
 
   const maxBlocks = BigInt(options?.maxBlocks ?? 15);
   const toBlock =
