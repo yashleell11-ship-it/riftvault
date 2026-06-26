@@ -82,10 +82,35 @@ const FILTERS = [
   { key: "gas", label: "Gas funding" },
 ] as const;
 
+const BSC_EXPLORER = "https://bscscan.com";
+
 function truncateHash(hash: string | null, len = 12) {
   if (!hash) return "—";
   if (hash.length <= len * 2) return hash;
   return `${hash.slice(0, len)}…${hash.slice(-6)}`;
+}
+
+function ExplorerLink({
+  hash,
+  type = "tx",
+  len = 12,
+}: {
+  hash: string | null;
+  type?: "tx" | "address";
+  len?: number;
+}) {
+  if (!hash) return <span>—</span>;
+  return (
+    <a
+      href={`${BSC_EXPLORER}/${type}/${hash}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-accent hover:underline"
+      title={hash}
+    >
+      {truncateHash(hash, len)}
+    </a>
+  );
 }
 
 function aggregatedDrained(result: RunResult) {
@@ -434,21 +459,25 @@ export function AdminSweepsPage() {
                 </span>
                 {d.toAddress && (
                   <span className="text-text-muted text-xs ml-2 font-mono">
-                    {truncateHash(d.toAddress, 8)}
+                    <ExplorerLink hash={d.toAddress} type="address" len={8} />
                   </span>
                 )}
               </p>
               <div className="grid sm:grid-cols-2 gap-1 text-xs font-mono text-text-muted">
                 <p>
                   <ArrowRightLeft className="inline h-3 w-3 mr-1" />
-                  Sweep: {truncateHash(d.sweepTxHash)}
+                  Sweep: <ExplorerLink hash={d.sweepTxHash} type="tx" />
                 </p>
                 <p>
                   <Fuel className="inline h-3 w-3 mr-1" />
-                  Gas fund: {truncateHash(d.gasFundingTxHash)}
+                  Gas fund: <ExplorerLink hash={d.gasFundingTxHash} type="tx" />
                 </p>
-                <p>BNB refund: {truncateHash(d.gasRefundTxHash)}</p>
-                <p>Deposit tx: {truncateHash(d.txHash)}</p>
+                <p>
+                  BNB refund: <ExplorerLink hash={d.gasRefundTxHash} type="tx" />
+                </p>
+                <p>
+                  Deposit tx: <ExplorerLink hash={d.txHash} type="tx" />
+                </p>
               </div>
               {d.sweepError && (
                 <p className="text-xs text-red-400 flex items-start gap-1">
