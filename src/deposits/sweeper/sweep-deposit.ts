@@ -4,11 +4,9 @@ import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { getUsdtTokenAddress, USDT_DECIMALS } from "@/payments/blockchain/usdt-bep20";
 import { deriveDepositAccount } from "@/deposits/blockchain/derive-account";
-import { readUsdtBalance } from "@/deposits/blockchain/erc20";
 import {
   estimateNativeTransferGas,
   estimateUsdtTransferGas,
-  gasFundingShortfall,
   refundableBnbAmount,
 } from "@/deposits/blockchain/gas";
 import {
@@ -19,6 +17,11 @@ import {
   sendSignedErc20Transfer,
   sendSignedTransaction,
 } from "@/deposits/blockchain/send-signed";
+import {
+  findPriorSweepTxAtAddress,
+  fundBnbUntilTarget,
+  readAddressBalances,
+} from "@/deposits/sweeper/address-sweep";
 import {
   getMaxSweepRetries,
   getMinBnbRefundWei,
@@ -260,142 +263,128 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       depositAddress: depositAccount.address,
     });
 
-    // ── Phase 1: Gas funding ──────────────────────────────────────────────
+    let balances = await readAddressBalances(publicClient, depositAddress);
+    logSweepEvent("Address balance snapshot", {
+      ...ctx,
+      step: "balance_snapshot",
+      amount: formatUnits(balances.usdt, USDT_DECIMALS),
+      gasSent: formatUnits(balances.bnb, 18),
+    });
+
+    // ── Phase 1: Gas funding (balance-first, multiple txs if needed) ────
     let gasFundingTxHash = deposit.gasFundingTxHash as `0x${string}` | null;
 
-    const usdtBalance = await readUsdtBalance(publicClient, depositAddress);
-
-    if (usdtBalance > 0n) {
-      let gasEstimate = await estimateUsdtTransferGas(
+    if (balances.usdt > 0n) {
+      const gasEstimate = await estimateUsdtTransferGas(
         publicClient,
         depositAddress,
         receiving,
-        usdtBalance
+        balances.usdt
       );
-      let bnbBalance = await publicClient.getBalance({ address: depositAddress });
-      let shortfall = gasFundingShortfall(bnbBalance, gasEstimate.fundingTarget);
 
-      if (shortfall > 0n) {
-        const gasClaim = await prisma.cryptoDeposit.updateMany({
+      if (balances.bnb < gasEstimate.fundingTarget) {
+        await prisma.cryptoDeposit.update({
           where: { id: depositId },
           data: { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
         });
-        if (gasClaim.count === 0 && !gasFundingTxHash) {
-          throw new Error("Gas funding already in progress by another worker");
-        }
 
         logSweepEvent("Funding gas for USDT sweep", {
           ...ctx,
           step: "gas_funding_started",
-          gasSent: formatUnits(shortfall, 18),
-          amount: formatUnits(gasEstimate.fundingTarget, 18),
+          gasSent: formatUnits(gasEstimate.fundingTarget, 18),
+          amount: formatUnits(balances.usdt, USDT_DECIMALS),
         });
 
-        const topUpHash = await sendSignedTransaction(treasury, {
-          to: depositAddress,
-          value: shortfall,
+        const funded = await fundBnbUntilTarget({
+          publicClient,
+          treasury,
+          depositAddress,
+          targetWei: gasEstimate.fundingTarget,
+          ctx,
+          waitForConfirmations,
         });
 
-        if (!gasFundingTxHash) {
-          gasFundingTxHash = topUpHash;
+        if (funded.firstFundingTxHash && !gasFundingTxHash) {
+          gasFundingTxHash = funded.firstFundingTxHash;
           await prisma.cryptoDeposit.update({
             where: { id: depositId },
             data: { gasFundingTxHash },
           });
         }
 
-        ctx.gasFundingTxHash = gasFundingTxHash ?? topUpHash;
-        ctx.gasSent = formatUnits(shortfall, 18);
-        logSweepEvent("Gas funding tx submitted", {
+        ctx.gasFundingTxHash = gasFundingTxHash ?? funded.firstFundingTxHash ?? undefined;
+        logSweepEvent("Gas funding complete", {
           ...ctx,
-          step: "gas_funding_tx_hash",
-          gasFundingTxHash: topUpHash,
-        });
-
-        await waitForConfirmations(topUpHash, getSweepTxConfirmations());
-        logSweepEvent("Gas funding confirmed", { ...ctx, step: "fund_gas_confirmed" });
-
-        bnbBalance = await publicClient.getBalance({ address: depositAddress });
-        gasEstimate = await estimateUsdtTransferGas(
-          publicClient,
-          depositAddress,
-          receiving,
-          usdtBalance
-        );
-        shortfall = gasFundingShortfall(bnbBalance, gasEstimate.fundingTarget);
-
-        if (shortfall > 0n) {
-          logSweepEvent("Gas top-up required after funding", {
-            ...ctx,
-            step: "gas_topup",
-            gasSent: formatUnits(shortfall, 18),
-          });
-          const topUp2 = await sendSignedTransaction(treasury, {
-            to: depositAddress,
-            value: shortfall,
-          });
-          await waitForConfirmations(topUp2, getSweepTxConfirmations());
-          bnbBalance = await publicClient.getBalance({ address: depositAddress });
-          gasEstimate = await estimateUsdtTransferGas(
-            publicClient,
-            depositAddress,
-            receiving,
-            usdtBalance
-          );
-        }
-
-        if (bnbBalance < gasEstimate.fundingTarget) {
-          throw new Error(
-            `Insufficient BNB after gas funding: balance ${bnbBalance} wei, need ${gasEstimate.fundingTarget} wei`
-          );
-        }
-
-        logSweepEvent("Deposit BNB balance verified for USDT sweep", {
-          ...ctx,
-          step: "gas_balance_verified",
-          gasSent: formatUnits(bnbBalance, 18),
-          amount: formatUnits(gasEstimate.fundingTarget, 18),
+          step: "gas_funding_complete",
+          amount: String(funded.fundingTxCount),
         });
       } else if (gasFundingTxHash) {
         await waitForConfirmations(gasFundingTxHash, 1);
-        bnbBalance = await publicClient.getBalance({ address: depositAddress });
-        gasEstimate = await estimateUsdtTransferGas(
-          publicClient,
-          depositAddress,
-          receiving,
-          usdtBalance
-        );
-        if (bnbBalance < gasEstimate.fundingTarget) {
-          shortfall = gasFundingShortfall(bnbBalance, gasEstimate.fundingTarget);
-          logSweepEvent("Additional gas funding required", {
-            ...ctx,
-            step: "gas_topup_existing",
-            gasSent: formatUnits(shortfall, 18),
-          });
-          const topUpHash = await sendSignedTransaction(treasury, {
-            to: depositAddress,
-            value: shortfall,
-          });
-          await waitForConfirmations(topUpHash, getSweepTxConfirmations());
-        }
       }
+
+      balances = await readAddressBalances(publicClient, depositAddress);
+      const postFundGas = await estimateUsdtTransferGas(
+        publicClient,
+        depositAddress,
+        receiving,
+        balances.usdt
+      );
+      if (balances.bnb < postFundGas.fundingTarget) {
+        const topUp = await fundBnbUntilTarget({
+          publicClient,
+          treasury,
+          depositAddress,
+          targetWei: postFundGas.fundingTarget,
+          ctx,
+          stepPrefix: "gas_topup",
+          waitForConfirmations,
+        });
+        if (topUp.firstFundingTxHash && !gasFundingTxHash) {
+          gasFundingTxHash = topUp.firstFundingTxHash;
+          await prisma.cryptoDeposit.update({
+            where: { id: depositId },
+            data: { gasFundingTxHash },
+          });
+        }
+        balances = await readAddressBalances(publicClient, depositAddress);
+      }
+
+      logSweepEvent("Deposit BNB balance verified for USDT sweep", {
+        ...ctx,
+        step: "gas_balance_verified",
+        gasSent: formatUnits(balances.bnb, 18),
+        amount: formatUnits(postFundGas.fundingTarget, 18),
+      });
     }
 
     // ── Phase 2: USDT sweep ───────────────────────────────────────────────
     let sweepTxHash = deposit.sweepTxHash as `0x${string}` | null;
-    const currentUsdt = await readUsdtBalance(publicClient, depositAddress);
+    balances = await readAddressBalances(publicClient, depositAddress);
 
-    if (currentUsdt > 0n && !sweepTxHash) {
-      const preSweepBnb = await publicClient.getBalance({ address: depositAddress });
+    if (balances.usdt > 0n && !sweepTxHash) {
       const preSweepGas = await estimateUsdtTransferGas(
         publicClient,
         depositAddress,
         receiving,
-        currentUsdt
+        balances.usdt
       );
-      if (preSweepBnb < preSweepGas.fundingTarget) {
+
+      if (balances.bnb < preSweepGas.fundingTarget) {
+        await fundBnbUntilTarget({
+          publicClient,
+          treasury,
+          depositAddress,
+          targetWei: preSweepGas.fundingTarget,
+          ctx,
+          stepPrefix: "pre_sweep_gas",
+          waitForConfirmations,
+        });
+        balances = await readAddressBalances(publicClient, depositAddress);
+      }
+
+      if (balances.bnb < preSweepGas.fundingTarget) {
         throw new Error(
-          `BNB balance too low immediately before USDT sweep: ${preSweepBnb} < ${preSweepGas.fundingTarget}`
+          `BNB balance too low before USDT sweep: ${balances.bnb} < ${preSweepGas.fundingTarget}`
         );
       }
 
@@ -413,29 +402,50 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           throw new Error("USDT sweep already in progress by another worker");
         }
       } else {
-      logSweepEvent("USDT sweep started", {
-        ...ctx,
-        step: "usdt_sweep_started",
-        amount: formatUnits(currentUsdt, USDT_DECIMALS),
-      });
+        logSweepEvent("USDT sweep started", {
+          ...ctx,
+          step: "usdt_sweep_started",
+          amount: formatUnits(balances.usdt, USDT_DECIMALS),
+        });
 
-      sweepTxHash = await sendSignedErc20Transfer(
-        depositAccount,
-        getUsdtTokenAddress(),
-        receiving,
-        currentUsdt
-      );
+        sweepTxHash = await sendSignedErc20Transfer(
+          depositAccount,
+          getUsdtTokenAddress(),
+          receiving,
+          balances.usdt
+        );
 
-      await prisma.cryptoDeposit.update({
-        where: { id: depositId },
-        data: { sweepTxHash },
-      });
-      ctx.sweepTxHash = sweepTxHash;
-      logSweepEvent("USDT sweep tx submitted", {
-        ...ctx,
-        step: "usdt_sweep_tx_hash",
-        sweepTxHash,
-      });
+        await prisma.cryptoDeposit.update({
+          where: { id: depositId },
+          data: { sweepTxHash },
+        });
+        ctx.sweepTxHash = sweepTxHash;
+        logSweepEvent("USDT sweep tx submitted", {
+          ...ctx,
+          step: "usdt_sweep_tx_hash",
+          sweepTxHash,
+        });
+      }
+    } else if (balances.usdt === 0n && !sweepTxHash) {
+      const priorSweep = await findPriorSweepTxAtAddress(depositAddress, depositId);
+      if (priorSweep) {
+        sweepTxHash = priorSweep;
+        await prisma.cryptoDeposit.update({
+          where: { id: depositId },
+          data: {
+            sweepTxHash: priorSweep,
+            sweepStatus: SWEEP_STATUS.SWEPT,
+            sweptAt: deposit.sweptAt ?? new Date(),
+          },
+        });
+        ctx.sweepTxHash = priorSweep;
+        logSweepEvent("USDT already swept at address — linked prior sweep tx", {
+          ...ctx,
+          step: "usdt_sweep_linked",
+          sweepTxHash: priorSweep,
+        });
+      } else {
+        logSweepEvent("No USDT at address — sweep not required", { ...ctx, step: "no_usdt" });
       }
     }
 
@@ -450,17 +460,38 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         },
       });
       logSweepEvent("USDT sweep confirmed", { ...ctx, step: "sweep_confirmed" });
-    } else if (currentUsdt === 0n) {
-      logSweepEvent("No USDT balance — skipping transfer", { ...ctx, step: "no_usdt" });
     }
 
     // ── Phase 3: BNB refund ───────────────────────────────────────────────
     let gasRefundTxHash = deposit.gasRefundTxHash as `0x${string}` | null;
+    balances = await readAddressBalances(publicClient, depositAddress);
 
     if (!gasRefundTxHash) {
-      const bnbAfter = await publicClient.getBalance({ address: depositAddress });
-      const { gasCost } = await estimateNativeTransferGas(publicClient);
-      const refundAmount = refundableBnbAmount(bnbAfter, gasCost, getMinBnbRefundWei());
+      const { gasCost, fundingTarget: refundGasTarget } =
+        await estimateNativeTransferGas(publicClient);
+      let refundAmount = refundableBnbAmount(
+        balances.bnb,
+        gasCost,
+        getMinBnbRefundWei()
+      );
+
+      if (refundAmount > 0n && balances.bnb < refundGasTarget) {
+        await fundBnbUntilTarget({
+          publicClient,
+          treasury,
+          depositAddress,
+          targetWei: refundGasTarget,
+          ctx,
+          stepPrefix: "refund_gas",
+          waitForConfirmations,
+        });
+        balances = await readAddressBalances(publicClient, depositAddress);
+        refundAmount = refundableBnbAmount(
+          balances.bnb,
+          gasCost,
+          getMinBnbRefundWei()
+        );
+      }
 
       if (refundAmount > 0n) {
         const refundClaim = await prisma.cryptoDeposit.updateMany({

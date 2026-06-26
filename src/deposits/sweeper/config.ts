@@ -43,3 +43,9 @@ export function getMinBnbRefundWei(): bigint {
   if (raw && /^\d+$/.test(raw)) return BigInt(raw);
   return 10_000_000_000_000n; // 0.00001 BNB
 }
+
+/** Max BNB funding txs per sweep (top-ups until balance is enough). */
+export function getMaxGasFundingTxs(): number {
+  const n = Number(process.env.SWEEPER_MAX_GAS_FUNDING_TXS ?? 5);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
+}

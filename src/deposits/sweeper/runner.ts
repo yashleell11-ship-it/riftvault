@@ -40,6 +40,8 @@ export async function resetStaleSweepFailures() {
       OR: [
         { sweepError: { contains: "eth_sendTransaction" } },
         { sweepError: { contains: "insufficient funds for gas" } },
+        { sweepError: { contains: "Insufficient BNB" } },
+        { sweepError: { contains: "BNB balance too low" } },
         { sweepError: { contains: "Timed out while waiting" } },
         { sweepError: { contains: "Confirmation pending" } },
         { sweepTxHash: { not: null } },
