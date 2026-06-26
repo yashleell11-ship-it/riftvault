@@ -24,6 +24,26 @@ export type SweeperDiagnostics = {
   };
 };
 
+export function verifyTreasuryWalletMatch(): {
+  treasuryAddress: string | null;
+  receivingWallet: string | null;
+  matches: boolean;
+} {
+  const receiving = getReceivingWallet();
+  const key = getTreasuryPrivateKey();
+  const treasuryAddress = key ? getTreasuryDerivedAddress(key) : null;
+
+  return {
+    treasuryAddress,
+    receivingWallet: receiving,
+    matches: Boolean(
+      treasuryAddress &&
+        receiving &&
+        treasuryAddress.toLowerCase() === receiving.toLowerCase()
+    ),
+  };
+}
+
 /** Full runtime validation — safe to call from routes (never throws). */
 export async function getSweeperDiagnostics(): Promise<SweeperDiagnostics> {
   const errors: string[] = [];

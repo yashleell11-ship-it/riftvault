@@ -5,8 +5,12 @@ import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { readUsdtBalance } from "@/deposits/blockchain/erc20";
-import { SWEEP_STATUS } from "@/deposits/sweeper/config";
-import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
+import {
+  getMaxSweepsPerTick,
+  getMaxSweepRetries,
+  SWEEP_STATUS,
+} from "@/deposits/sweeper/config";
+import { getSweeperDiagnostics, verifyTreasuryWalletMatch } from "@/deposits/sweeper/diagnostics";
 
 export async function GET() {
   if (!(await requireAdmin())) {
@@ -31,6 +35,8 @@ export async function GET() {
     }
   }
 
+  const maxRetries = getMaxSweepRetries();
+
   const [pending, completed, failed, gasFunded, refunded] = await Promise.all([
     prisma.cryptoDeposit.count({
       where: {
@@ -44,6 +50,7 @@ export async function GET() {
           { sweepStatus: SWEEP_STATUS.SWEEPING },
           { sweepStatus: SWEEP_STATUS.SWEPT },
           { sweepStatus: SWEEP_STATUS.REFUNDING },
+          { sweepStatus: SWEEP_STATUS.FAILED, retryCount: { lt: maxRetries } },
         ],
       },
     }),
@@ -62,10 +69,12 @@ export async function GET() {
   ]);
 
   const diagnostics = await getSweeperDiagnostics();
+  const treasuryMatch = verifyTreasuryWalletMatch();
 
   return NextResponse.json({
     enabled: diagnostics.enabled,
     diagnostics,
+    treasuryMatch,
     receivingWallet: receiving,
     treasury: { bnb: treasuryBnb, usdt: treasuryUsdt },
     counts: { pending, completed, failed, gasFunded, refunded },

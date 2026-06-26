@@ -23,6 +23,7 @@ import {
   getMaxSweepRetries,
   getMinBnbRefundWei,
   getSweepTxConfirmations,
+  getSweepTxWaitMs,
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
@@ -37,17 +38,81 @@ export type SweepResult = {
   gasRefundTxHash?: string | null;
 };
 
+async function sleep(ms: number) {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function isReceiptWaitTimeout(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return (
+    error.name === "WaitForTransactionReceiptTimeoutError" ||
+    error.message.includes("Timed out while waiting for transaction")
+  );
+}
+
+/** Wait for BSC confirmations — polls up to SWEEPER_TX_WAIT_MS (default 3 min). */
 async function waitForConfirmations(txHash: `0x${string}`, required: number) {
   const client = getBscPublicClient();
-  const receipt = await client.waitForTransactionReceipt({
-    hash: txHash,
-    confirmations: required,
-    timeout: 120_000,
-  });
-  if (receipt.status !== "success") {
-    throw new Error(`Transaction reverted: ${txHash}`);
+  const timeout = getSweepTxWaitMs();
+  const pollingInterval = 3_000;
+  const started = Date.now();
+
+  const existing = await client.getTransactionReceipt({ hash: txHash }).catch(() => null);
+  if (existing) {
+    const latest = await client.getBlockNumber();
+    const confirmations = Number(latest - existing.blockNumber + 1n);
+    if (confirmations >= required) {
+      if (existing.status !== "success") {
+        throw new Error(`Transaction reverted: ${txHash}`);
+      }
+      return existing;
+    }
   }
-  return receipt;
+
+  logSweepEvent("Waiting for tx confirmations", {
+    depositId: "—",
+    step: "wait_confirmations",
+    sweepTxHash: txHash,
+    amount: String(required),
+  });
+
+  try {
+    const receipt = await client.waitForTransactionReceipt({
+      hash: txHash,
+      confirmations: required,
+      timeout,
+      pollingInterval,
+    });
+    if (receipt.status !== "success") {
+      throw new Error(`Transaction reverted: ${txHash}`);
+    }
+    return receipt;
+  } catch (error) {
+    if (!isReceiptWaitTimeout(error)) throw error;
+
+    logSweepEvent("Receipt wait timed out — polling fallback", {
+      depositId: "—",
+      step: "wait_confirmations_fallback",
+      sweepTxHash: txHash,
+    });
+
+    while (Date.now() - started < timeout) {
+      const receipt = await client.getTransactionReceipt({ hash: txHash }).catch(() => null);
+      if (receipt) {
+        const latest = await client.getBlockNumber();
+        const confirmations = Number(latest - receipt.blockNumber + 1n);
+        if (confirmations >= required) {
+          if (receipt.status !== "success") {
+            throw new Error(`Transaction reverted: ${txHash}`);
+          }
+          return receipt;
+        }
+      }
+      await sleep(pollingInterval);
+    }
+
+    throw error;
+  }
 }
 
 async function resolveDerivationIndex(
@@ -469,6 +534,49 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     const message = error instanceof Error ? error.message : String(error);
     const stack = error instanceof Error ? error.stack : undefined;
     const durationMs = Date.now() - started;
+
+    if (isReceiptWaitTimeout(error)) {
+      const latest = await prisma.cryptoDeposit.findUnique({
+        where: { id: depositId },
+        select: {
+          sweepTxHash: true,
+          gasFundingTxHash: true,
+          gasRefundTxHash: true,
+        },
+      });
+      const submittedSweep =
+        latest?.sweepTxHash ?? ctx.sweepTxHash ?? deposit.sweepTxHash;
+      const submittedGas =
+        latest?.gasFundingTxHash ?? ctx.gasFundingTxHash ?? deposit.gasFundingTxHash;
+      const submittedRefund =
+        latest?.gasRefundTxHash ?? ctx.gasRefundTxHash ?? deposit.gasRefundTxHash;
+      const hasSubmittedTx = submittedSweep || submittedGas || submittedRefund;
+
+      if (hasSubmittedTx) {
+        logSweepEvent("Sweep paused — tx submitted, confirmation timed out (will resume)", {
+          ...ctx,
+          step: "wait_timeout_resumable",
+          error: message,
+          durationMs,
+        });
+        await prisma.cryptoDeposit.update({
+          where: { id: depositId },
+          data: {
+            sweepStatus: submittedSweep ? SWEEP_STATUS.SWEPT : SWEEP_STATUS.SWEEPING,
+            sweepError: `Confirmation pending: ${message}`.slice(0, 2000),
+          },
+        });
+        return {
+          depositId,
+          status: "awaiting_confirmation",
+          error: message,
+          sweepTxHash: submittedSweep,
+          gasFundingTxHash: submittedGas,
+          gasRefundTxHash: submittedRefund,
+        };
+      }
+    }
+
     logSweepEvent("Sweep failed", {
       ...ctx,
       step: "error",

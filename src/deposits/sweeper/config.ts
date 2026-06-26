@@ -31,6 +31,12 @@ export function getSweepTxConfirmations(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
 }
 
+/** Max wait for on-chain confirmation (default 3 min — BSC usually confirms in under 30s). */
+export function getSweepTxWaitMs(): number {
+  const n = Number(process.env.SWEEPER_TX_WAIT_MS ?? 180_000);
+  return Number.isFinite(n) && n >= 30_000 ? Math.floor(n) : 180_000;
+}
+
 /** Minimum recoverable BNB (wei) for refund — below this we skip. */
 export function getMinBnbRefundWei(): bigint {
   const raw = process.env.SWEEPER_MIN_BNB_REFUND_WEI?.trim();

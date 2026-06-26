@@ -125,10 +125,40 @@ export function AdminSweepsPage() {
     load();
   }, [load]);
 
+  async function resetFailedSweeps(depositId?: string) {
+    setRunning(true);
+    setRunProgress(depositId ? "Resetting deposit…" : "Resetting failed sweeps…");
+    const res = await fetch("/api/admin/sweeps/reset-failed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(depositId ? { depositId } : {}),
+    });
+    const data = await res.json();
+    setRunning(false);
+    setRunProgress(null);
+    if (!res.ok) {
+      setRunResult({
+        ok: false,
+        pendingFound: 0,
+        gasFunded: 0,
+        swept: 0,
+        refunded: 0,
+        durationMs: 0,
+        errors: [data.error ?? "Reset failed"],
+        results: [],
+      });
+      return false;
+    }
+    await load();
+    return true;
+  }
+
   async function runSweepNow() {
     setRunning(true);
     setRunResult(null);
-    setRunProgress("Starting…");
+    setRunProgress("Resetting failed sweeps…");
+
+    await fetch("/api/admin/sweeps/reset-failed", { method: "POST" });
 
     const aggregated: RunResult = {
       ok: true,
@@ -174,7 +204,6 @@ export function AdminSweepsPage() {
       setRunResult({ ...aggregated });
 
       if ((data.processed ?? 0) === 0) break;
-      if ((data.failed ?? 0) > 0 && (data.completed ?? 0) === 0) break;
     }
 
     setRunProgress(null);
@@ -198,6 +227,14 @@ export function AdminSweepsPage() {
           <Button size="sm" variant="secondary" onClick={load} disabled={loading}>
             <RefreshCw className={cn("h-4 w-4 mr-1", loading && "animate-spin")} />
             Refresh
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={() => resetFailedSweeps()}
+            disabled={running || loading || (stats?.counts.failed ?? 0) === 0}
+          >
+            Reset failed
           </Button>
           <Button size="sm" onClick={runSweepNow} disabled={running || loading}>
             {running ? (runProgress ?? "Sweeping…") : "Run sweep now"}
@@ -318,7 +355,22 @@ export function AdminSweepsPage() {
                   <p className="font-medium text-sm">{d.user.displayName}</p>
                   <p className="text-xs text-text-muted">{d.user.email}</p>
                 </div>
-                {statusBadge(d.sweepStatus)}
+                <div className="flex items-center gap-2">
+                  {statusBadge(d.sweepStatus)}
+                  {d.sweepStatus === "failed" && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={running}
+                      onClick={async () => {
+                        const ok = await resetFailedSweeps(d.id);
+                        if (ok) await runSweepNow();
+                      }}
+                    >
+                      Reset & retry
+                    </Button>
+                  )}
+                </div>
               </div>
               <p className="text-sm">
                 <span className="text-gold font-semibold">

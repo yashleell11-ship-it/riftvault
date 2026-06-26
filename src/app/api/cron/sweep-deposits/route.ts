@@ -4,7 +4,7 @@ import { runSweeperTick } from "@/deposits/sweeper/runner";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 function serializeError(error: unknown) {
   if (error instanceof Error) {

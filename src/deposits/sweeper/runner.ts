@@ -30,8 +30,8 @@ export type SweeperTickResult = {
   errors: string[];
 };
 
-/** Find confirmed, credited deposits that still need on-chain consolidation. */
-export async function resetStaleSendTransactionFailures() {
+/** Reset failed sweeps that are safe to retry (RPC quirks, confirmation timeouts, etc.). */
+export async function resetStaleSweepFailures() {
   const reset = await prisma.cryptoDeposit.updateMany({
     where: {
       status: "confirmed",
@@ -40,6 +40,9 @@ export async function resetStaleSendTransactionFailures() {
       OR: [
         { sweepError: { contains: "eth_sendTransaction" } },
         { sweepError: { contains: "insufficient funds for gas" } },
+        { sweepError: { contains: "Timed out while waiting" } },
+        { sweepError: { contains: "Confirmation pending" } },
+        { sweepTxHash: { not: null } },
       ],
     },
     data: {
@@ -50,7 +53,7 @@ export async function resetStaleSendTransactionFailures() {
   });
 
   if (reset.count > 0) {
-    logSweepEvent("Reset stale sweep failures (gas/sendTransaction)", {
+    logSweepEvent("Reset stale sweep failures", {
       depositId: "—",
       step: "reset_stale_failures",
       amount: String(reset.count),
@@ -59,6 +62,9 @@ export async function resetStaleSendTransactionFailures() {
 
   return reset.count;
 }
+
+/** @deprecated Use resetStaleSweepFailures */
+export const resetStaleSendTransactionFailures = resetStaleSweepFailures;
 
 /** Find confirmed, credited deposits that still need on-chain consolidation. */
 export async function findDepositsToSweep(limit: number) {
@@ -124,7 +130,7 @@ export async function runSweeperTick(options?: {
     depositAddress: diagnostics.checks.receivingWallet ?? undefined,
   });
 
-  await resetStaleSendTransactionFailures();
+  await resetStaleSweepFailures();
 
   const limit = options?.limit ?? getMaxSweepsPerTick();
   const pending = await findDepositsToSweep(limit);
@@ -175,10 +181,13 @@ export async function runSweeperTick(options?: {
       refunded += 1;
     }
 
-    if (result.error) errors.push(`${id}: ${result.error}`);
+    if (result.error && result.status !== "awaiting_confirmation") {
+      errors.push(`${id}: ${result.error}`);
+    }
     if (result.skipped) skipped += 1;
     else if (result.status === SWEEP_STATUS.COMPLETED) completed += 1;
     else if (result.status === SWEEP_STATUS.FAILED) failed += 1;
+    else if (result.status === "awaiting_confirmation") skipped += 1;
     else skipped += 1;
   }
 
