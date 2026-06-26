@@ -187,6 +187,12 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     const depositWallet = createBscWalletClient(depositAccount);
     const treasuryWallet = createBscWalletClient(treasury);
 
+    logSweepEvent("Local signing clients ready", {
+      ...ctx,
+      step: "wallet_clients",
+      depositAddress: depositAccount.address,
+    });
+
     // ── Phase 1: Gas funding ──────────────────────────────────────────────
     let gasFundingTxHash = deposit.gasFundingTxHash as `0x${string}` | null;
 
@@ -225,7 +231,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           });
 
           gasFundingTxHash = await treasuryWallet.sendTransaction({
-            account: treasury.address,
+            account: treasury,
             to: depositAddress,
             value: fundAmount,
             chain: treasuryWallet.chain,
@@ -283,7 +289,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         abi: ERC20_TRANSFER_ABI,
         functionName: "transfer",
         args: [receiving, currentUsdt],
-        account: depositAccount.address,
+        account: depositAccount,
         chain: depositWallet.chain,
       });
 
@@ -342,7 +348,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         });
 
         gasRefundTxHash = await depositWallet.sendTransaction({
-          account: depositAccount.address,
+          account: depositAccount,
           to: receiving,
           value: refundAmount,
           chain: depositWallet.chain,

@@ -1,5 +1,5 @@
 import { parseAbiItem } from "viem";
-import type { PublicClient, WalletClient } from "viem";
+import type { Account, PublicClient, WalletClient } from "viem";
 import { getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 
 export const ERC20_TRANSFER_ABI = [
@@ -22,11 +22,11 @@ export async function readUsdtBalance(
 export async function transferFullUsdtBalance(
   wallet: WalletClient,
   publicClient: PublicClient,
-  from: `0x${string}`,
+  from: Account,
   to: `0x${string}`
 ): Promise<{ hash: `0x${string}`; amount: bigint } | null> {
   const token = getUsdtTokenAddress();
-  const balance = await readUsdtBalance(publicClient, from);
+  const balance = await readUsdtBalance(publicClient, from.address);
   if (balance <= 0n) return null;
 
   const hash = await wallet.writeContract({

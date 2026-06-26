@@ -1,9 +1,9 @@
 import { createWalletClient, http, type Account, type WalletClient } from "viem";
 import { bsc, bscTestnet } from "viem/chains";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import { getBscChainId, getBscRpcUrl, getReceivingWallet } from "@/payments/blockchain/config";
 
-let cachedTreasuryAccount: ReturnType<typeof privateKeyToAccount> | null | undefined;
+let cachedTreasuryAccount: PrivateKeyAccount | null | undefined;
 let cachedTreasuryMismatch: string | null | undefined;
 
 function stripEnvSecret(raw: string | undefined): string | null {
@@ -46,7 +46,7 @@ export function getTreasuryAddressMismatch(): string | null {
 }
 
 /** Hot-wallet account that funds deposit addresses with BNB (must match RECEIVING_WALLET). */
-export function getTreasuryAccount(): ReturnType<typeof privateKeyToAccount> | null {
+export function getTreasuryAccount(): PrivateKeyAccount | null {
   if (cachedTreasuryAccount !== undefined) return cachedTreasuryAccount;
 
   const key = getTreasuryPrivateKey();
@@ -65,6 +65,11 @@ export function getTreasuryAccount(): ReturnType<typeof privateKeyToAccount> | n
   return cachedTreasuryAccount;
 }
 
+/**
+ * Wallet client that signs locally (eth_sendRawTransaction).
+ * The account MUST be a LocalAccount (privateKeyToAccount / mnemonicToAccount) —
+ * never pass an address-only string to sendTransaction/writeContract.
+ */
 export function createBscWalletClient(account: Account): WalletClient {
   const chainId = getBscChainId();
   const chain = chainId === bsc.id ? bsc : bscTestnet;
@@ -78,6 +83,12 @@ export function createBscWalletClient(account: Account): WalletClient {
       retryDelay: 500,
     }),
   });
+}
+
+export function createTreasuryWalletClient(): WalletClient | null {
+  const account = getTreasuryAccount();
+  if (!account) return null;
+  return createBscWalletClient(account);
 }
 
 /** Reset cached treasury account (tests / hot reload). */
