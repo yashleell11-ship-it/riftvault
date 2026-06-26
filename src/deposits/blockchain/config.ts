@@ -48,3 +48,9 @@ export function getDepositRequiredConfirmations(): number {
 }
 
 export const DEPOSIT_LISTENER_STATE_ID = "bsc-usdt-deposits";
+export const DEPOSIT_ADDRESS_ROTATION_STATE_ID = "bsc-usdt-deposit-rotate";
+
+export function getDepositScanMaxAddressesPerTick(): number {
+  const n = Number(process.env.DEPOSIT_SCAN_MAX_ADDRESSES ?? 8);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 8;
+}

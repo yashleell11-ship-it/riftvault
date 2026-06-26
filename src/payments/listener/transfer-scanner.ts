@@ -47,7 +47,7 @@ export async function scanUsdtTransfers(options?: {
         ? latestBlock - lookback
         : 0n;
 
-  const maxBlocks = BigInt(options?.maxBlocks ?? 200);
+  const maxBlocks = BigInt(options?.maxBlocks ?? 30);
   const toBlock =
     fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
 
