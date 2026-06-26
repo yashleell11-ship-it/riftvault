@@ -4,7 +4,7 @@
  *
  * Usage: npm run payments:listen
  */
-import "dotenv/config";
+import "../src/lib/load-env";
 import { uniqueDepositAddressesEnabled } from "../src/lib/env";
 import { getListenerPollMs, isUsdtPaymentsEnabled } from "../src/payments/blockchain/config";
 import { runPaymentListenerTick } from "../src/payments/listener/runner";
