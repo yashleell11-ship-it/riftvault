@@ -201,7 +201,7 @@ Checkout also triggers scans via SSE/polling while the user waits.
 |---------|------------------|
 | Ledger cold wallet | Change `RECEIVING_WALLET` env only |
 | Unique address per order | Populate `UserDepositAddress`; listener matches `to` per order |
-| Auto-sweep | New `sweeper` service + hot wallet key in env (separate from receiving) |
+| Auto-sweep | **Implemented (Phase 39)** — see Treasury sweeper below |
 | Multi-currency | Extend `blockchain/` module per token contract |
 
 ---
@@ -220,6 +220,24 @@ Each user gets a **personal BSC address** derived from `DEPOSIT_MNEMONIC` (HD wa
 Users send USDT to their address on **Dashboard → Wallet**. The listener auto-detects and credits balance.
 
 **Ledger later:** keep using HD mnemonic on a separate hot wallet, or swap to xpub-based derivation — architecture supports changing env only.
+
+---
+
+## Treasury sweeper (Phase 39)
+
+After a deposit is **confirmed** and the in-app wallet is credited, the sweeper consolidates on-chain USDT from the user's HD deposit address into `RECEIVING_WALLET`. Leftover BNB (after gas) is refunded to the treasury.
+
+| Variable | Description |
+|----------|-------------|
+| `ENABLE_DEPOSIT_SWEEPER` | `true` to enable automatic sweeps |
+| `TREASURY_PRIVATE_KEY` | Private key for `RECEIVING_WALLET` (funds gas only — must match address) |
+| `DEPOSIT_MNEMONIC` | Signs USDT + BNB refund from deposit addresses |
+| `SWEEPER_MAX_PER_TICK` | Deposits processed per cron tick (default `2`) |
+| `SWEEPER_MAX_RETRIES` | Failed sweep retries (default `5`) |
+
+**Cron:** `GET /api/cron/sweep-deposits` (Vercel daily + `CRON_SECRET`). **Admin:** `/admin/sweeps`. **Local:** `npm run payments:sweep`.
+
+Deposit detection and wallet credit are unchanged — sweeper runs as a separate step.
 
 ---
 

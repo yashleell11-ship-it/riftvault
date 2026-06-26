@@ -83,7 +83,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     return db.cryptoDeposit.update({
       where: { id },
-      data: { status: "confirmed", walletTxId: walletTx.id },
+      data: { status: "confirmed", walletTxId: walletTx.id, sweepStatus: "pending" },
     });
   }).catch((error) => {
     if (error instanceof Error && error.message === "ALREADY_PROCESSED") return null;

@@ -48,6 +48,7 @@ export async function confirmCryptoDeposit(depositId: string) {
       data: {
         status: "confirmed",
         walletTxId: walletTx.id,
+        sweepStatus: "pending",
       },
     });
 

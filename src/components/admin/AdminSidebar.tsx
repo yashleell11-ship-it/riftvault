@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Shield, Users, Wallet, ImageIcon, Gift, BarChart2, Hexagon, ShieldCheck, ScrollText, Building2, ArrowDownLeft } from "lucide-react";
+import { Shield, Users, Wallet, ImageIcon, Gift, BarChart2, Hexagon, ShieldCheck, ScrollText, Building2, ArrowDownLeft, Landmark } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links = [
@@ -11,6 +11,7 @@ const links = [
   { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/withdrawals", label: "Withdrawals", icon: Wallet },
   { href: "/admin/deposits", label: "Deposits", icon: ArrowDownLeft },
+  { href: "/admin/sweeps", label: "Sweeper", icon: Landmark },
   { href: "/admin/kyc", label: "KYC", icon: ShieldCheck },
   { href: "/admin/nfts", label: "Upload NFTs", icon: ImageIcon },
   { href: "/admin/airdrops", label: "Airdrops", icon: Gift },

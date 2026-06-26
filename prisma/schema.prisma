@@ -232,6 +232,14 @@ model CryptoDeposit {
   status        String   @default("pending")
   autoDetected  Boolean  @default(false)
   walletTxId    String?
+  /// Treasury sweeper (Phase 39) — on-chain consolidation to RECEIVING_WALLET.
+  sweptAt           DateTime?
+  sweepTxHash       String?
+  gasFundingTxHash  String?
+  gasRefundTxHash   String?
+  sweepStatus       String?
+  retryCount        Int      @default(0)
+  sweepError        String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -239,6 +247,7 @@ model CryptoDeposit {
   @@index([userId, status])
   @@index([status, createdAt])
   @@index([toAddress])
+  @@index([sweepStatus, createdAt])
 }
 
 // ─── USDT BEP20 PAYMENTS (self-hosted) ───────────────────────────────────────
