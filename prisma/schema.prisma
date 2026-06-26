@@ -59,6 +59,8 @@ model User {
   bridgeIntents       BridgeIntent[]
   kycProfile          KycProfile?
   auditLogs           AuditLog[]          @relation("AuditActor")
+  depositAddresses    UserDepositAddress[]
+  cryptoDeposits      CryptoDeposit[]
 }
 
 model Session {
@@ -190,6 +192,40 @@ model WalletTransaction {
 
   @@index([userId, createdAt])
   @@index([userId, currency])
+}
+
+/// Per-user on-chain deposit address (Phase 37 will auto-generate these).
+model UserDepositAddress {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainKey  String
+  asset     String
+  address   String   @unique
+  createdAt DateTime @default(now())
+
+  @@unique([userId, chainKey, asset])
+  @@index([userId])
+}
+
+/// Incoming crypto deposit — user-reported or auto-detected (pending admin confirm until Phase 37).
+model CryptoDeposit {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainKey    String
+  asset       String
+  amount      Float
+  txHash      String?  @unique
+  fromAddress String?
+  toAddress   String?
+  status      String   @default("pending")
+  walletTxId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status, createdAt])
 }
 
 model AirdropCampaign {

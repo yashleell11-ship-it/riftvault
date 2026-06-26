@@ -326,6 +326,28 @@ Small phases so each chat session stays focused. Say **"do Phase N"** to continu
 - `MakeOfferTrigger` — client wrapper so server page stays RSC
 - `/explore/[id]` — wires `AuctionSection` (for `status=auction`) and `MakeOfferTrigger` (for listed/auction, non-owners)
 
+---
+
+## Phase 34 — Production wallet guard ✅
+- `src/lib/env.ts` — `isProduction()`, `allowDemoDeposits()`, `uniqueDepositAddressesEnabled()`
+- `POST /api/wallet/deposit` blocked in production unless `ALLOW_DEMO_DEPOSITS=true`
+- Wallet deposit UI switches between demo credit (dev) and report-deposit flow (prod)
+
+## Phase 35 — Crypto deposit schema ✅
+- `UserDepositAddress` + `CryptoDeposit` Prisma models (prep for per-user addresses)
+- `GET /api/wallet/deposit-info` — supported chains/assets, addresses, recent deposits
+- `DepositPanel` component on `/dashboard/wallet` with “unique addresses coming soon” banner
+
+## Phase 36 — Admin deposit queue ✅
+- `POST /api/wallet/deposit/report` — user reports on-chain transfer (pending review)
+- `GET /api/admin/deposits`, `PATCH /api/admin/deposits/[id]` — confirm/reject + credit ledger
+- `/admin/deposits` — admin review queue with audit log entries
+
+## Phase 37 — Unique deposit address per user (next)
+- Auto-generate `UserDepositAddress` per user × chain × asset
+- On-chain listener / webhook to auto-confirm deposits
+- QR code + copy UI on wallet page
+
 ### H1 — Postgres + deploy guide ✅
 - `docs/DEPLOY.md` — step-by-step Vercel + Neon/Supabase deployment guide
 - `prisma/schema.prisma` — comment block explaining `sqlite` (dev) → `postgresql` (prod) provider switch

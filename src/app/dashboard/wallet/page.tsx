@@ -4,13 +4,13 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  ArrowDownLeft,
   ArrowUpRight,
   Gift,
   History,
   Wallet,
 } from "lucide-react";
 import { WithdrawWalletButton } from "@/components/wallet/WithdrawWalletButton";
+import { DepositPanel } from "@/components/wallet/DepositPanel";
 import { truncateAddress } from "@/lib/crypto-address";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -63,10 +63,9 @@ export default function WalletPage() {
   const [transactions, setTransactions] = useState<WalletTx[]>([]);
   const [loading, setLoading] = useState(true);
   const [currency, setCurrency] = useState<CurrencyCode>(getDefaultCurrency());
-  const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [withdrawWalletAddress, setWithdrawWalletAddress] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState<"deposit" | "withdraw" | null>(null);
+  const [submitting, setSubmitting] = useState<"withdraw" | null>(null);
   const [message, setMessage] = useState<{ type: "ok" | "err"; text: string } | null>(null);
 
   const load = useCallback(async () => {
@@ -96,30 +95,6 @@ export default function WalletPage() {
   useEffect(() => {
     load();
   }, [load]);
-
-  async function handleDeposit(e: React.FormEvent) {
-    e.preventDefault();
-    const amount = parseFloat(depositAmount);
-    if (!amount || amount <= 0) return;
-
-    setSubmitting("deposit");
-    setMessage(null);
-    const res = await fetch("/api/wallet/deposit", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount, currency }),
-    });
-    const data = await res.json();
-    setSubmitting(null);
-
-    if (res.ok) {
-      setDepositAmount("");
-      setMessage({ type: "ok", text: "Crypto deposit credited to your ledger." });
-      load();
-    } else {
-      setMessage({ type: "err", text: data.error ?? "Deposit failed" });
-    }
-  }
 
   async function handleWithdraw(e: React.FormEvent) {
     e.preventDefault();
@@ -256,30 +231,14 @@ export default function WalletPage() {
           )}
         </Card>
 
-        <Card className="lg:col-span-1">
-          <div className="flex items-center gap-2 mb-4">
-            <ArrowDownLeft className="h-4 w-4 text-accent" />
-            <h2 className="font-display font-semibold">Deposit crypto</h2>
-          </div>
-          <p className="text-xs text-text-muted mb-3">
-            Demo ledger credit — in production, deposits confirm from on-chain transfers.
-          </p>
-          <form onSubmit={handleDeposit} className="space-y-3">
-            <input
-              type="number"
-              step="any"
-              min="0"
-              placeholder="Amount"
-              value={depositAmount}
-              onChange={(e) => setDepositAmount(e.target.value)}
-              className="w-full rounded-xl border border-border bg-bg-elevated px-3 py-2.5 text-sm"
-              required
-            />
-            <Button type="submit" className="w-full" disabled={submitting === "deposit"}>
-              {submitting === "deposit" ? "Processing..." : "Credit deposit"}
-            </Button>
-          </form>
-        </Card>
+        <DepositPanel
+          currency={currency}
+          onSuccess={(text) => {
+            setMessage({ type: "ok", text });
+            load();
+          }}
+          onError={(text) => setMessage({ type: "err", text })}
+        />
 
         <Card className="lg:col-span-1">
           <div className="flex items-center gap-2 mb-4">

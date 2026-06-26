@@ -55,6 +55,20 @@ export const walletWithdrawSchema = z.object({
   currency: currencySchema.optional(),
 });
 
+export const depositReportSchema = z.object({
+  amount: z.number().positive().max(1_000_000),
+  currency: currencySchema,
+  chainKey: z.string().min(1).max(40),
+  txHash: z
+    .string()
+    .regex(/^0x[a-fA-F0-9]{64}$/, "Invalid transaction hash")
+    .optional(),
+});
+
+export const adminDepositActionSchema = z.object({
+  action: z.enum(["confirm", "reject"]),
+});
+
 export const airdropClaimSchema = z.object({
   campaignId: z.string().min(1),
 });

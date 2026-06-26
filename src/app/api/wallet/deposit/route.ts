@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { allowDemoDeposits } from "@/lib/env";
 import { walletDepositSchema } from "@/lib/validations";
 import { creditWallet } from "@/lib/wallet";
 
@@ -8,6 +9,16 @@ export async function POST(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!allowDemoDeposits()) {
+    return NextResponse.json(
+      {
+        error:
+          "Demo deposits are disabled in production. Report your on-chain transfer or wait for your unique deposit address.",
+      },
+      { status: 403 }
+    );
   }
 
   try {
