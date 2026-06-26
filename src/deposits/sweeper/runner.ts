@@ -7,6 +7,7 @@ import {
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
+import { backfillLegacyDepositsForSweeper } from "@/deposits/sweeper/backfill";
 import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
 import {
   countDepositsToSweep,
@@ -154,6 +155,7 @@ export async function runSweeperTick(options?: {
   });
 
   await resetStaleSweepFailures();
+  await backfillLegacyDepositsForSweeper();
   await completeBelowMinDeposits();
   await reconcileSiblingDepositsAtEmptyAddresses();
 
@@ -261,6 +263,7 @@ export async function runSweeperUntilDone(options?: {
 
   await resetAllSweepFailures();
   await resetStaleSweepFailures();
+  await backfillLegacyDepositsForSweeper();
   await completeBelowMinDeposits();
   await reconcileSiblingDepositsAtEmptyAddresses();
 

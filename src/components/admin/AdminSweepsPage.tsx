@@ -29,6 +29,12 @@ type Stats = {
     gasFunded: number;
     refunded: number;
   };
+  backfill?: {
+    sweepStatusSet: number;
+    toAddressSet: number;
+    addressesLinked: number;
+  };
+  reconciled?: number;
 };
 
 type RunResult = {
@@ -413,8 +419,27 @@ export function AdminSweepsPage() {
           <span>BNB refunded: {stats.counts.refunded}</span>
           <span>·</span>
           <span className="text-red-400">Failed: {stats.counts.failed}</span>
+          {stats.counts.queueReady != null && (
+            <>
+              <span>·</span>
+              <span>In sweep queue: {stats.counts.queueReady}</span>
+            </>
+          )}
         </div>
       )}
+
+      {stats?.backfill &&
+        (stats.backfill.sweepStatusSet > 0 ||
+          stats.backfill.toAddressSet > 0 ||
+          stats.backfill.addressesLinked > 0) && (
+          <Card className="mb-4 border-accent/30 bg-accent/5 text-xs px-4 py-2 text-text-muted">
+            Legacy backfill: {stats.backfill.sweepStatusSet} sweep status
+            {stats.backfill.toAddressSet > 0 && ` · ${stats.backfill.toAddressSet} addresses from tx`}
+            {stats.backfill.addressesLinked > 0 &&
+              ` · ${stats.backfill.addressesLinked} HD rows linked`}
+            {(stats.reconciled ?? 0) > 0 && ` · ${stats.reconciled} reconciled`}
+          </Card>
+        )}
 
       <div className="flex flex-wrap gap-2 mb-4">
         {FILTERS.map((f) => (
@@ -477,6 +502,9 @@ export function AdminSweepsPage() {
                   <span className="text-text-muted text-xs ml-2 font-mono">
                     <ExplorerLink hash={d.toAddress} type="address" len={8} />
                   </span>
+                )}
+                {!d.toAddress && (
+                  <span className="text-amber-400 text-xs ml-2">no deposit address</span>
                 )}
               </p>
               <div className="grid sm:grid-cols-2 gap-1 text-xs font-mono text-text-muted">

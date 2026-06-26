@@ -9,6 +9,7 @@ import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics, verifyTreasuryWalletMatch } from "@/deposits/sweeper/diagnostics";
 import { countDepositsToSweep } from "@/deposits/sweeper/queue";
 import { reconcileSiblingDepositsAtEmptyAddresses } from "@/deposits/sweeper/reconcile";
+import { backfillLegacyDepositsForSweeper } from "@/deposits/sweeper/backfill";
 
 export async function GET() {
   if (!(await requireAdmin())) {
@@ -33,7 +34,8 @@ export async function GET() {
     }
   }
 
-  await reconcileSiblingDepositsAtEmptyAddresses();
+  const backfill = await backfillLegacyDepositsForSweeper();
+  const reconciled = await reconcileSiblingDepositsAtEmptyAddresses();
 
   const openWhere = {
     status: "confirmed" as const,
@@ -68,5 +70,7 @@ export async function GET() {
     receivingWallet: receiving,
     treasury: { bnb: treasuryBnb, usdt: treasuryUsdt },
     counts: { pending, queueReady, completed, failed, gasFunded, refunded },
+    backfill,
+    reconciled,
   });
 }

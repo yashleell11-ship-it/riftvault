@@ -23,6 +23,8 @@ import {
   fundBnbUntilTarget,
   readAddressBalances,
 } from "@/deposits/sweeper/address-sweep";
+import { isBlankSweepStatus } from "@/deposits/sweeper/backfill";
+import { resolveDerivationIndexForDeposit } from "@/deposits/sweeper/derive-index";
 import {
   isReceiptWaitTimeout,
   isTransactionConfirmed,
@@ -51,29 +53,7 @@ async function resolveDerivationIndex(
   depositId: string,
   toAddress: string | null
 ): Promise<number | null> {
-  if (!toAddress) return null;
-
-  const row = await prisma.userDepositAddress.findFirst({
-    where: { address: toAddress.toLowerCase() },
-    select: { derivationIndex: true },
-  });
-  if (row) return row.derivationIndex;
-
-  const deposit = await prisma.cryptoDeposit.findUnique({
-    where: { id: depositId },
-    select: { userId: true, chainKey: true, asset: true },
-  });
-  if (!deposit) return null;
-
-  const byUser = await prisma.userDepositAddress.findFirst({
-    where: {
-      userId: deposit.userId,
-      chainKey: deposit.chainKey,
-      asset: deposit.asset,
-    },
-    select: { derivationIndex: true },
-  });
-  return byUser?.derivationIndex ?? null;
+  return resolveDerivationIndexForDeposit(depositId, toAddress);
 }
 
 async function markFailed(depositId: string, error: string) {
@@ -127,25 +107,33 @@ export async function claimDepositForSweep(depositId: string) {
     ];
 
     const runnable =
-      deposit.sweepStatus == null ||
+      isBlankSweepStatus(deposit.sweepStatus) ||
       deposit.sweepStatus === SWEEP_STATUS.PENDING ||
       (deposit.sweepStatus === SWEEP_STATUS.FAILED && deposit.retryCount < maxRetries) ||
       resumable.includes(deposit.sweepStatus as (typeof resumable)[number]);
 
     if (!runnable) return null;
 
+    const currentStatus = isBlankSweepStatus(deposit.sweepStatus)
+      ? null
+      : deposit.sweepStatus;
     const nextStatus =
-      deposit.sweepStatus === SWEEP_STATUS.FAILED || deposit.sweepStatus == null
+      deposit.sweepStatus === SWEEP_STATUS.FAILED || isBlankSweepStatus(deposit.sweepStatus)
         ? SWEEP_STATUS.PENDING
         : deposit.sweepStatus;
+
+    const statusWhere =
+      currentStatus === null
+        ? { OR: [{ sweepStatus: null }, { sweepStatus: "" }] }
+        : { sweepStatus: currentStatus };
 
     const claimed = await tx.cryptoDeposit.updateMany({
       where: {
         id: depositId,
         status: "confirmed",
         walletTxId: { not: null },
-        sweepStatus: deposit.sweepStatus,
         NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
+        ...statusWhere,
       },
       data: {
         sweepStatus: nextStatus,
