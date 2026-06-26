@@ -65,7 +65,8 @@ async function main() {
       }
 
       if (!res.ok) {
-        console.error("[payment-listener] Scan request failed:", res.status, data);
+        const detail = data.details?.message ?? data.details?.name ?? data.error;
+        console.error("[payment-listener] Scan request failed:", res.status, detail ?? data);
         return;
       }
 

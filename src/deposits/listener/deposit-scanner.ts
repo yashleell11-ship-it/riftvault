@@ -1,9 +1,11 @@
-import type { Log } from "viem";
 import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
-import { ERC20_TRANSFER_EVENT, getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 import { addressesEqual } from "@/payments/blockchain/amounts";
+import {
+  decodeTransferLog,
+  fetchUsdtTransferLogs,
+} from "@/payments/blockchain/log-scanner";
 import {
   getListenerCursor,
   setListenerCursor,
@@ -15,27 +17,6 @@ import {
   updateDepositConfirmations,
 } from "@/deposits/services/confirm-deposit";
 import { uniqueDepositAddressesEnabled } from "@/lib/env";
-
-type ScannedTransfer = {
-  txHash: string;
-  logIndex: number;
-  blockNumber: bigint;
-  fromAddress: string;
-  toAddress: string;
-  amountRaw: string;
-};
-
-function decodeTransferLog(log: Log): ScannedTransfer | null {
-  if (!log.topics[1] || !log.topics[2] || log.data === undefined) return null;
-  return {
-    txHash: log.transactionHash!.toLowerCase(),
-    logIndex: log.logIndex!,
-    blockNumber: log.blockNumber!,
-    fromAddress: `0x${log.topics[1].slice(-40)}`.toLowerCase(),
-    toAddress: `0x${log.topics[2].slice(-40)}`.toLowerCase(),
-    amountRaw: BigInt(log.data).toString(),
-  };
-}
 
 /** Scan BSC USDT transfers to unique user deposit addresses. */
 export async function scanUserDepositTransfers(options?: { maxBlocks?: number }) {
@@ -50,7 +31,6 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
 
   const client = getBscPublicClient();
   const latestBlock = await client.getBlockNumber();
-  const token = getUsdtTokenAddress();
 
   const cursor = await getListenerCursor(prisma, DEPOSIT_LISTENER_STATE_ID);
   const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 2_000);
@@ -61,7 +41,7 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
         ? latestBlock - lookback
         : 0n;
 
-  const maxBlocks = BigInt(options?.maxBlocks ?? 500);
+  const maxBlocks = BigInt(options?.maxBlocks ?? 200);
   const toBlock =
     fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
 
@@ -70,15 +50,25 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
     return { scanned: 0, matched: 0 };
   }
 
-  const logs = await client.getLogs({
-    address: token,
-    event: ERC20_TRANSFER_EVENT,
+  const depositAddresses = [...addressMap.keys()] as `0x${string}`[];
+  const receiving = getReceivingWallet()?.toLowerCase();
+  const scanAddresses = receiving
+    ? depositAddresses.filter((addr) => !addressesEqual(addr, receiving))
+    : depositAddresses;
+
+  if (scanAddresses.length === 0) {
+    await setListenerCursor(prisma, DEPOSIT_LISTENER_STATE_ID, toBlock);
+    await updateDepositConfirmations();
+    return { scanned: Number(toBlock - fromBlock + 1n), matched: 0 };
+  }
+
+  const logs = await fetchUsdtTransferLogs(client, {
     fromBlock,
     toBlock,
+    toAddresses: scanAddresses,
   });
 
   let matched = 0;
-  const receiving = getReceivingWallet()?.toLowerCase();
 
   for (const log of logs) {
     const transfer = decodeTransferLog(log);
@@ -87,7 +77,6 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
     const owner = addressMap.get(transfer.toAddress);
     if (!owner) continue;
 
-    // Skip checkout receiving wallet (handled by payment matcher).
     if (receiving && addressesEqual(transfer.toAddress, receiving)) continue;
 
     const existing = await prisma.cryptoDeposit.findUnique({

@@ -26,7 +26,7 @@ async function main() {
 
   const tick = async () => {
     try {
-      const result = await runPaymentListenerTick({ maxBlocks: 500 });
+      const result = await runPaymentListenerTick({ maxBlocks: 100 });
       if (result.matched > 0 || result.depositMatched > 0) {
         console.log(
           `[payment-listener] Scanned ${result.scanned} blocks — checkout: ${result.matched}, deposits: ${result.depositMatched}`

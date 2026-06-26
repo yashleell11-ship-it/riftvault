@@ -1,11 +1,13 @@
-import type { Log } from "viem";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import {
   getReceivingWallet,
   PAYMENT_LISTENER_STATE_ID,
 } from "@/payments/blockchain/config";
-import { ERC20_TRANSFER_EVENT, getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 import { addressesEqual } from "@/payments/blockchain/amounts";
+import {
+  decodeTransferLog,
+  fetchUsdtTransferLogs,
+} from "@/payments/blockchain/log-scanner";
 import {
   getListenerCursor,
   isTransferProcessed,
@@ -23,23 +25,6 @@ export type ScannedTransfer = {
   amountRaw: string;
 };
 
-function decodeTransferLog(log: Log): ScannedTransfer | null {
-  if (!log.topics[1] || !log.topics[2] || log.data === undefined) return null;
-
-  const from = `0x${log.topics[1].slice(-40)}`.toLowerCase();
-  const to = `0x${log.topics[2].slice(-40)}`.toLowerCase();
-  const value = BigInt(log.data);
-
-  return {
-    txHash: log.transactionHash!.toLowerCase(),
-    logIndex: log.logIndex!,
-    blockNumber: log.blockNumber!,
-    fromAddress: from,
-    toAddress: to,
-    amountRaw: value.toString(),
-  };
-}
-
 export async function scanUsdtTransfers(options?: {
   maxBlocks?: number;
   paymentOrderId?: string;
@@ -52,7 +37,6 @@ export async function scanUsdtTransfers(options?: {
 
   const client = getBscPublicClient();
   const latestBlock = await client.getBlockNumber();
-  const token = getUsdtTokenAddress();
 
   const cursor = await getListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID);
   const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 2_000);
@@ -63,10 +47,7 @@ export async function scanUsdtTransfers(options?: {
         ? latestBlock - lookback
         : 0n;
 
-  const maxBlocks = BigInt(options?.maxBlocks ?? 500);
-  if (fromBlock + maxBlocks < latestBlock) {
-    // Process in chunks to avoid RPC limits
-  }
+  const maxBlocks = BigInt(options?.maxBlocks ?? 200);
   const toBlock =
     fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
 
@@ -74,14 +55,10 @@ export async function scanUsdtTransfers(options?: {
     return { scanned: 0, matched: 0, latestBlock };
   }
 
-  const logs = await client.getLogs({
-    address: token,
-    event: ERC20_TRANSFER_EVENT,
+  const logs = await fetchUsdtTransferLogs(client, {
     fromBlock,
     toBlock,
-    args: {
-      to: receiving,
-    },
+    toAddresses: [receiving],
   });
 
   let matched = 0;
