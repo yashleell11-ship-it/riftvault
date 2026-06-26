@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/close-auctions",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/api/cron/scan-usdt-payments",
+      "schedule": "*/5 * * * *"
     }
   ]
 }

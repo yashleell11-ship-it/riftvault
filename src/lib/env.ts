@@ -11,5 +11,12 @@ export function allowDemoDeposits() {
 
 /** Unique per-user deposit addresses (Phase 37). */
 export function uniqueDepositAddressesEnabled() {
-  return process.env.ENABLE_UNIQUE_DEPOSIT_ADDRESSES === "true";
+  if (process.env.ENABLE_UNIQUE_DEPOSIT_ADDRESSES !== "true") return false;
+  const mnemonic = process.env.DEPOSIT_MNEMONIC?.trim();
+  return Boolean(mnemonic && mnemonic.split(" ").length >= 12);
+}
+
+export function isDepositDerivationConfigured() {
+  const mnemonic = process.env.DEPOSIT_MNEMONIC?.trim();
+  return Boolean(mnemonic && mnemonic.split(" ").length >= 12);
 }

@@ -343,10 +343,21 @@ Small phases so each chat session stays focused. Say **"do Phase N"** to continu
 - `GET /api/admin/deposits`, `PATCH /api/admin/deposits/[id]` — confirm/reject + credit ledger
 - `/admin/deposits` — admin review queue with audit log entries
 
-## Phase 37 — Unique deposit address per user (next)
-- Auto-generate `UserDepositAddress` per user × chain × asset
-- On-chain listener / webhook to auto-confirm deposits
-- QR code + copy UI on wallet page
+## Phase 37 — Unique deposit address per user ✅
+- HD-derived `UserDepositAddress` per user from `DEPOSIT_MNEMONIC` (BSC + USDT)
+- `src/deposits/` — derive, provision, auto-scan, auto-credit wallet
+- Deposit listener integrated into `runPaymentListenerTick` + `npm run payments:listen`
+- Wallet `DepositPanel` — personal address, QR code, live status polling
+- Manual report form hidden when `ENABLE_UNIQUE_DEPOSIT_ADDRESSES=true`
+
+## Phase 38 — USDT BEP20 self-hosted checkout ✅
+- `src/payments/` modular architecture (blockchain, listener, services, database)
+- `UsdtPaymentOrder`, `UsdtPayment`, `PaymentTransaction`, `PaymentListenerState` models
+- Checkout `/checkout/usdt/[id]` with QR, live SSE status, polling fallback
+- `POST /api/payments/usdt/create`, status + stream APIs, cron scan route
+- `scripts/payment-listener.ts` for VPS/PM2 (`npm run payments:listen`)
+- `RECEIVING_WALLET` env — Ledger-ready without code changes
+- Docs: `docs/USDT_PAYMENTS.md`
 
 ### H1 — Postgres + deploy guide ✅
 - `docs/DEPLOY.md` — step-by-step Vercel + Neon/Supabase deployment guide

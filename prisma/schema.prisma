@@ -61,6 +61,7 @@ model User {
   auditLogs           AuditLog[]          @relation("AuditActor")
   depositAddresses    UserDepositAddress[]
   cryptoDeposits      CryptoDeposit[]
+  usdtPaymentOrders   UsdtPaymentOrder[]
 }
 
 model Session {
@@ -194,38 +195,126 @@ model WalletTransaction {
   @@index([userId, currency])
 }
 
-/// Per-user on-chain deposit address (Phase 37 will auto-generate these).
+/// Per-user on-chain deposit address (HD-derived from DEPOSIT_MNEMONIC).
 model UserDepositAddress {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chainKey  String
-  asset     String
-  address   String   @unique
-  createdAt DateTime @default(now())
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainKey        String
+  asset           String
+  address         String   @unique
+  derivationIndex Int
+  createdAt       DateTime @default(now())
 
   @@unique([userId, chainKey, asset])
   @@index([userId])
+  @@index([address])
 }
 
-/// Incoming crypto deposit — user-reported or auto-detected (pending admin confirm until Phase 37).
+/// Incoming crypto deposit — auto-detected (Phase 37) or user-reported (admin confirm).
 model CryptoDeposit {
-  id          String   @id @default(cuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  chainKey    String
-  asset       String
-  amount      Float
-  txHash      String?  @unique
-  fromAddress String?
-  toAddress   String?
-  status      String   @default("pending")
-  walletTxId  String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chainKey      String
+  asset         String
+  amount        Float
+  amountRaw     String?
+  txHash        String?
+  logIndex      Int?
+  blockNumber   Int?
+  confirmations Int      @default(0)
+  fromAddress   String?
+  toAddress     String?
+  status        String   @default("pending")
+  autoDetected  Boolean  @default(false)
+  walletTxId    String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
+  @@unique([txHash, logIndex])
   @@index([userId, status])
   @@index([status, createdAt])
+  @@index([toAddress])
+}
+
+// ─── USDT BEP20 PAYMENTS (self-hosted) ───────────────────────────────────────
+
+/// Checkout payment intent — created before on-chain USDT transfer.
+model UsdtPaymentOrder {
+  id                    String   @id @default(cuid())
+  userId                String
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nftId                 String
+  productName           String
+  listPrice             Float
+  /// Exact USDT amount customer must send (includes uniqueness suffix).
+  expectedAmount        String
+  /// Amount in token smallest units (18 decimals on BSC USDT).
+  expectedAmountRaw     String
+  receivingWallet       String
+  chainId               Int      @default(56)
+  tokenContract         String
+  status                String   @default("pending")
+  txHash                String?  @unique
+  blockNumber           Int?
+  confirmations         Int      @default(0)
+  requiredConfirmations Int      @default(12)
+  fromAddress           String?
+  marketplaceOrderId    String?
+  expiresAt             DateTime
+  paidAt                DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  payments     UsdtPayment[]
+  transactions PaymentTransaction[]
+
+  @@index([userId, status])
+  @@index([status, expiresAt])
+  @@index([receivingWallet, status])
+  @@index([expectedAmountRaw, status])
+}
+
+/// Detected on-chain USDT transfer matched to a payment order.
+model UsdtPayment {
+  id             String           @id @default(cuid())
+  paymentOrderId String
+  paymentOrder   UsdtPaymentOrder @relation(fields: [paymentOrderId], references: [id], onDelete: Cascade)
+  txHash         String
+  logIndex       Int
+  blockNumber    Int
+  fromAddress    String
+  toAddress      String
+  amountRaw      String
+  confirmations  Int              @default(0)
+  status         String           @default("detected")
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([txHash, logIndex])
+  @@index([paymentOrderId])
+  @@index([txHash])
+}
+
+/// Payment status / audit history for live UI and debugging.
+model PaymentTransaction {
+  id             String           @id @default(cuid())
+  paymentOrderId String
+  paymentOrder   UsdtPaymentOrder @relation(fields: [paymentOrderId], references: [id], onDelete: Cascade)
+  eventType      String
+  message        String?
+  data           String?
+  createdAt      DateTime         @default(now())
+
+  @@index([paymentOrderId, createdAt])
+}
+
+/// Persists blockchain scanner cursor across restarts.
+model PaymentListenerState {
+  id        String   @id
+  lastBlock BigInt
+  updatedAt DateTime @updatedAt
 }
 
 model AirdropCampaign {

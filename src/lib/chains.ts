@@ -12,6 +12,17 @@ export type Chain = {
 
 export const CHAINS: Chain[] = [
   {
+    id: 56,
+    key: "bsc",
+    name: "BNB Smart Chain",
+    shortName: "BSC",
+    rpc: process.env.BSC_RPC_URL ?? process.env.NEXT_PUBLIC_BSC_RPC_URL ?? "https://bsc-dataseed.binance.org",
+    nativeCurrency: { name: "BNB", symbol: "BNB", decimals: 18 },
+    explorerUrl: "https://bscscan.com",
+    usdtAddress: "0x55d398326f99059fF775485246999027B3197955",
+    testnet: false,
+  },
+  {
     id: 11155111,
     key: "sepolia",
     name: "Ethereum Sepolia",

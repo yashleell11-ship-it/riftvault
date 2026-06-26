@@ -4,11 +4,22 @@ import { prisma } from "@/lib/db";
 import { getChainByKey } from "@/lib/chains";
 import { depositReportSchema } from "@/lib/validations";
 import { createNotification } from "@/lib/notifications";
+import { uniqueDepositAddressesEnabled } from "@/lib/env";
 
 export async function POST(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (uniqueDepositAddressesEnabled()) {
+    return NextResponse.json(
+      {
+        error:
+          "Deposits are auto-detected. Send USDT to your personal deposit address on the wallet page.",
+      },
+      { status: 400 }
+    );
   }
 
   try {
@@ -29,7 +40,9 @@ export async function POST(request: Request) {
     }
 
     if (txHash) {
-      const existing = await prisma.cryptoDeposit.findUnique({ where: { txHash } });
+      const existing = await prisma.cryptoDeposit.findUnique({
+        where: { txHash_logIndex: { txHash: txHash.toLowerCase(), logIndex: 0 } },
+      });
       if (existing) {
         return NextResponse.json({ error: "This transaction was already reported" }, { status: 409 });
       }
@@ -41,8 +54,10 @@ export async function POST(request: Request) {
         chainKey,
         asset: currency,
         amount,
-        txHash: txHash ?? null,
+        txHash: txHash?.toLowerCase() ?? null,
+        logIndex: txHash ? 0 : null,
         status: "pending",
+        autoDetected: false,
       },
     });
 

@@ -4,9 +4,10 @@ import { prisma } from "@/lib/db";
 import {
   getSupportedDepositOptions,
   listUserCryptoDeposits,
-  listUserDepositAddresses,
 } from "@/lib/deposits";
 import { allowDemoDeposits, uniqueDepositAddressesEnabled } from "@/lib/env";
+import { ensureUserDepositAddresses } from "@/deposits/services/provision-addresses";
+import { scanUserDepositTransfers } from "@/deposits/listener/deposit-scanner";
 
 export async function GET() {
   const user = await getSessionUser();
@@ -14,17 +15,26 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const [addresses, pendingDeposits] = await Promise.all([
-    listUserDepositAddresses(prisma, user.id),
-    listUserCryptoDeposits(prisma, user.id, 5),
-  ]);
+  if (uniqueDepositAddressesEnabled()) {
+    try {
+      await scanUserDepositTransfers({ maxBlocks: 80 });
+    } catch (error) {
+      console.error("[deposit-info] scan:", error);
+    }
+  }
+
+  const addresses = uniqueDepositAddressesEnabled()
+    ? await ensureUserDepositAddresses(user.id)
+    : [];
+
+  const recentDeposits = await listUserCryptoDeposits(prisma, user.id, 8);
 
   return NextResponse.json({
     demoDepositsEnabled: allowDemoDeposits(),
     uniqueAddressesEnabled: uniqueDepositAddressesEnabled(),
-    uniqueAddressesComingSoon: !uniqueDepositAddressesEnabled(),
+    uniqueAddressesComingSoon: false,
     supportedOptions: getSupportedDepositOptions(),
     addresses,
-    recentDeposits: pendingDeposits,
+    recentDeposits,
   });
 }

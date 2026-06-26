@@ -12,7 +12,8 @@
     "db:setup": "prisma db push && prisma db seed",
     "postinstall": "prisma generate",
     "contracts:compile": "cd contracts && npm install && npm run compile",
-    "contracts:deploy": "cd contracts && npm run deploy:sepolia"
+    "contracts:deploy": "cd contracts && npm run deploy:sepolia",
+    "payments:listen": "tsx scripts/payment-listener.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
@@ -21,11 +22,13 @@
     "@prisma/client": "^6.19.3",
     "@tanstack/react-query": "^5.101.1",
     "bcryptjs": "^3.0.3",
+    "dotenv": "^17.4.2",
     "jose": "^6.2.3",
     "lucide-react": "^1.21.0",
     "next": "16.2.9",
     "nodemailer": "^9.0.1",
     "otplib": "^13.4.1",
+    "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "sonner": "^2.0.7",
@@ -40,6 +43,7 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/nodemailer": "^8.0.1",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",

@@ -39,6 +39,7 @@ export function NftActions({
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [chainEnabled, setChainEnabled] = useState(false);
+  const [usdtEnabled, setUsdtEnabled] = useState(false);
 
   const { writeContract, data: txHash, isPending: isWriting } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: isConfirmed } =
@@ -48,6 +49,9 @@ export function NftActions({
     fetch("/api/chain/status")
       .then((r) => r.json())
       .then((d) => setChainEnabled(d.enabled));
+    fetch("/api/payments/usdt/create")
+      .then((r) => r.json())
+      .then((d) => setUsdtEnabled(Boolean(d.enabled)));
   }, []);
 
   useEffect(() => {
@@ -94,6 +98,30 @@ export function NftActions({
     }
     router.push("/dashboard/nfts");
     router.refresh();
+  }
+
+  async function handleBuyUsdt() {
+    if (!loggedIn) {
+      router.push(`/login?redirect=/explore/${nftId}`);
+      return;
+    }
+
+    setLoading(true);
+    setMessage("");
+    const res = await fetch("/api/payments/usdt/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nftId }),
+    });
+    const data = await res.json();
+    setLoading(false);
+
+    if (!res.ok) {
+      setMessage(data.error ?? "Could not start USDT checkout");
+      return;
+    }
+
+    router.push(data.checkoutUrl);
   }
 
   async function handleBuyOnChain() {
@@ -169,12 +197,24 @@ export function NftActions({
     }
 
     const canOnChain = chainEnabled && chainListingId && currency === "ETH";
+    const canUsdt = usdtEnabled && currency === "USDT";
 
     return (
       <div className="w-full space-y-3">
         <Button size="lg" className="w-full" onClick={handleBuyBalance} disabled={busy}>
           {busy ? "Processing..." : `Pay from balance · ${formatPrice(price, currency)}`}
         </Button>
+        {canUsdt && (
+          <Button
+            variant="gold"
+            size="lg"
+            className="w-full"
+            onClick={handleBuyUsdt}
+            disabled={busy}
+          >
+            {busy ? "Starting checkout…" : `Pay with USDT (BEP20) · ${formatPrice(price, currency)}`}
+          </Button>
+        )}
         {canOnChain && (
           <>
             <ConnectButton size="md" />
