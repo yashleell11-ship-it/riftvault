@@ -1,21 +1,17 @@
 import { NextResponse } from "next/server";
+import { authorizeCronOrVercelCli } from "@/lib/cron-auth";
 import { uniqueDepositAddressesEnabled } from "@/lib/env";
 import { runPaymentListenerTick } from "@/payments/listener/runner";
 import { isUsdtPaymentsEnabled } from "@/payments/blockchain/config";
+
+export const dynamic = "force-dynamic";
 
 function isListenerEnabled() {
   return isUsdtPaymentsEnabled() || uniqueDepositAddressesEnabled();
 }
 
-function authorizeCron(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  const auth = request.headers.get("authorization");
-  return auth === `Bearer ${secret}`;
-}
-
 export async function GET(request: Request) {
-  if (!authorizeCron(request)) {
+  if (!(await authorizeCronOrVercelCli(request))) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

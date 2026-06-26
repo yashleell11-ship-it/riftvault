@@ -13,7 +13,9 @@
     "postinstall": "prisma generate",
     "contracts:compile": "cd contracts && npm install && npm run compile",
     "contracts:deploy": "cd contracts && npm run deploy:sepolia",
-    "payments:listen": "tsx scripts/payment-listener.ts"
+    "payments:env:sync": "tsx scripts/sync-vercel-env.ts",
+    "payments:listen": "tsx scripts/payment-listener-runner.ts",
+    "payments:listen:local": "tsx scripts/payment-listener.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
