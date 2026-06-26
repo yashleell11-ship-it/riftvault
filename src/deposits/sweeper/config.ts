@@ -56,6 +56,18 @@ export function getMaxGasFundingTxs(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
 
+/** Max unique addresses to batch-fund gas for per tick. */
+export function getBatchFundAddressLimit(): number {
+  const n = Number(process.env.SWEEPER_BATCH_FUND_LIMIT ?? 100);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 100;
+}
+
+/** Max wall-clock ms for a single drain run (Vercel-safe default 4.5 min). */
+export function getSweepDrainMaxMs(): number {
+  const n = Number(process.env.SWEEPER_DRAIN_MAX_MS ?? 270_000);
+  return Number.isFinite(n) && n >= 60_000 ? Math.floor(n) : 270_000;
+}
+
 /** Minimum deposit amount (USDT) worth sweeping — below this is auto-completed, no on-chain tx. */
 export function getMinSweepUsdt(): number {
   const n = Number(process.env.SWEEPER_MIN_USDT ?? 0.1);

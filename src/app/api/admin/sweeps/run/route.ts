@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { runSweeperTick } from "@/deposits/sweeper/runner";
+import { runSweeperTick, runSweeperUntilDone } from "@/deposits/sweeper/runner";
 import { getAdminSweepBatchLimit } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
@@ -15,7 +15,7 @@ function serializeError(error: unknown) {
   return { message: String(error) };
 }
 
-/** Run sweeper tick immediately (admin). Batch-funds all addresses then processes up to SWEEPER_ADMIN_BATCH_LIMIT deposits. */
+/** Run sweeper until queue empty or timeout. Default: full drain. */
 export async function POST(request: Request) {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -27,14 +27,26 @@ export async function POST(request: Request) {
     const { searchParams } = new URL(request.url);
     const maxLimit = getAdminSweepBatchLimit();
     const limitParam = Number(searchParams.get("limit") ?? String(maxLimit));
-    const limit =
+    const batchLimit =
       Number.isFinite(limitParam) && limitParam > 0
         ? Math.min(Math.floor(limitParam), maxLimit)
         : maxLimit;
-    const result = await runSweeperTick({ limit, includeDiagnostics: true, batchFund: true });
+    const singleTick = searchParams.get("tick") === "1";
+
+    const result = singleTick
+      ? await runSweeperTick({ limit: batchLimit, includeDiagnostics: true, batchFund: true })
+      : await runSweeperUntilDone({ batchLimit, includeDiagnostics: true });
+
+    const drained = "drained" in result ? result.drained : result.pendingFound === 0;
+    const remainingPending =
+      "remainingPending" in result ? result.remainingPending : result.pendingFound;
+    const rounds = "rounds" in result ? result.rounds : 1;
 
     return NextResponse.json({
-      ok: diagnostics.enabled && result.errors.length === 0,
+      ok: diagnostics.enabled && result.errors.length === 0 && drained,
+      drained,
+      remainingPending,
+      rounds,
       diagnostics,
       pendingFound: result.pendingFound,
       gasFunded: result.gasFunded,

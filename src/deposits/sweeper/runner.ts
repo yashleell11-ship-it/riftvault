@@ -1,5 +1,13 @@
 import { prisma } from "@/lib/db";
-import { getMaxSweepsPerTick, getMaxSweepRetries, getMinSweepUsdt, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import {
+  getAdminSweepBatchLimit,
+  getBatchFundAddressLimit,
+  getMaxSweepsPerTick,
+  getMaxSweepRetries,
+  getMinSweepUsdt,
+  getSweepDrainMaxMs,
+  SWEEP_STATUS,
+} from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
@@ -27,6 +35,63 @@ export type SweeperTickResult = {
   }[];
   errors: string[];
 };
+
+export type SweeperDrainResult = SweeperTickResult & {
+  rounds: number;
+  remainingPending: number;
+  drained: boolean;
+};
+
+function sweepQueueWhere() {
+  const maxRetries = getMaxSweepRetries();
+  const minUsdt = getMinSweepUsdt();
+  return {
+    status: "confirmed" as const,
+    walletTxId: { not: null },
+    amount: { gte: minUsdt },
+    NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
+    OR: [
+      { sweepStatus: null },
+      { sweepStatus: SWEEP_STATUS.PENDING },
+      { sweepStatus: SWEEP_STATUS.FAILED, retryCount: { lt: maxRetries } },
+      { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
+      { sweepStatus: SWEEP_STATUS.SWEEPING },
+      { sweepStatus: SWEEP_STATUS.SWEPT },
+      { sweepStatus: SWEEP_STATUS.REFUNDING },
+    ],
+  };
+}
+
+/** Count deposits still needing consolidation. */
+export async function countDepositsToSweep(): Promise<number> {
+  return prisma.cryptoDeposit.count({ where: sweepQueueWhere() });
+}
+
+/** Reset every failed sweep so drain can retry. */
+export async function resetAllSweepFailures() {
+  const reset = await prisma.cryptoDeposit.updateMany({
+    where: {
+      status: "confirmed",
+      walletTxId: { not: null },
+      sweepStatus: SWEEP_STATUS.FAILED,
+    },
+    data: {
+      sweepStatus: SWEEP_STATUS.PENDING,
+      retryCount: 0,
+      sweepError: null,
+    },
+  });
+
+  if (reset.count > 0) {
+    logSweepEvent("Reset all sweep failures for drain", {
+      depositId: "—",
+      step: "reset_all_failures",
+      amount: String(reset.count),
+    });
+  }
+
+  return reset.count;
+}
 
 /** Reset failed sweeps that are safe to retry (RPC quirks, confirmation timeouts, etc.). */
 export async function resetStaleSweepFailures() {
@@ -69,29 +134,25 @@ export const resetStaleSendTransactionFailures = resetStaleSweepFailures;
 
 /** Find confirmed, credited deposits that still need on-chain consolidation. */
 export async function findDepositsToSweep(limit: number) {
-  const maxRetries = getMaxSweepRetries();
-  const minUsdt = getMinSweepUsdt();
+  const where = sweepQueueWhere();
 
-  return prisma.cryptoDeposit.findMany({
-    where: {
-      status: "confirmed",
-      walletTxId: { not: null },
-      amount: { gte: minUsdt },
-      NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
-      OR: [
-        { sweepStatus: null },
-        { sweepStatus: SWEEP_STATUS.PENDING },
-        { sweepStatus: SWEEP_STATUS.FAILED, retryCount: { lt: maxRetries } },
-        { sweepStatus: SWEEP_STATUS.FUNDING_GAS },
-        { sweepStatus: SWEEP_STATUS.SWEEPING },
-        { sweepStatus: SWEEP_STATUS.SWEPT },
-        { sweepStatus: SWEEP_STATUS.REFUNDING },
-      ],
-    },
+  const finishable = await prisma.cryptoDeposit.findMany({
+    where: { ...where, sweepTxHash: { not: null } },
     orderBy: { createdAt: "asc" },
     take: limit,
     select: { id: true, sweepStatus: true },
   });
+
+  if (finishable.length >= limit) return finishable;
+
+  const rest = await prisma.cryptoDeposit.findMany({
+    where: { ...where, sweepTxHash: null },
+    orderBy: { createdAt: "asc" },
+    take: limit - finishable.length,
+    select: { id: true, sweepStatus: true },
+  });
+
+  return [...finishable, ...rest];
 }
 
 export async function runSweeperTick(options?: {
@@ -141,7 +202,7 @@ export async function runSweeperTick(options?: {
   let batchAddressesFunded = 0;
 
   if (options?.batchFund !== false) {
-    const batch = await fundGasForAllPendingAddresses(limit);
+    const batch = await fundGasForAllPendingAddresses(getBatchFundAddressLimit());
     if (!batch.ok && batch.error) errors.push(batch.error);
     batchAddressesFunded = batch.addressesFunded ?? 0;
   }
@@ -226,5 +287,109 @@ export async function runSweeperTick(options?: {
     diagnostics: options?.includeDiagnostics ? diagnostics : undefined,
     results,
     errors,
+  };
+}
+
+/** Loop sweeper ticks until queue empty or wall time exceeded. */
+export async function runSweeperUntilDone(options?: {
+  batchLimit?: number;
+  maxWallMs?: number;
+  includeDiagnostics?: boolean;
+}): Promise<SweeperDrainResult> {
+  const started = Date.now();
+  const batchLimit = options?.batchLimit ?? getAdminSweepBatchLimit();
+  const maxWallMs = options?.maxWallMs ?? getSweepDrainMaxMs();
+
+  await resetAllSweepFailures();
+  await resetStaleSweepFailures();
+  await completeBelowMinDeposits();
+
+  let rounds = 0;
+  let totalCompleted = 0;
+  let totalFailed = 0;
+  let totalSkipped = 0;
+  let totalGasFunded = 0;
+  let totalSwept = 0;
+  let totalRefunded = 0;
+  let totalBatchFunded = 0;
+  let totalProcessed = 0;
+  const allResults: SweeperTickResult["results"] = [];
+  const allErrors: string[] = [];
+  let diagnostics: SweeperTickResult["diagnostics"];
+  let stuckRounds = 0;
+
+  while (Date.now() - started < maxWallMs) {
+    const remainingBefore = await countDepositsToSweep();
+    if (remainingBefore === 0) break;
+
+    rounds += 1;
+    const tick = await runSweeperTick({
+      limit: batchLimit,
+      batchFund: true,
+      includeDiagnostics: rounds === 1 || options?.includeDiagnostics,
+    });
+
+    if (tick.diagnostics) diagnostics = tick.diagnostics;
+    totalCompleted += tick.completed;
+    totalFailed += tick.failed;
+    totalSkipped += tick.skipped;
+    totalGasFunded += tick.gasFunded;
+    totalSwept += tick.swept;
+    totalRefunded += tick.refunded;
+    totalBatchFunded += tick.batchAddressesFunded ?? 0;
+    totalProcessed += tick.processed;
+    allResults.push(...tick.results);
+    for (const err of tick.errors) {
+      if (!allErrors.includes(err)) allErrors.push(err);
+    }
+
+    const remainingAfter = await countDepositsToSweep();
+    if (remainingAfter === 0) break;
+
+    if (remainingAfter === remainingBefore && tick.completed === 0) {
+      stuckRounds += 1;
+      if (stuckRounds >= 2) {
+        logSweepEvent("Drain stopped — queue not progressing", {
+          depositId: "—",
+          step: "drain_stuck",
+          amount: String(remainingAfter),
+        });
+        break;
+      }
+      await resetAllSweepFailures();
+    } else {
+      stuckRounds = 0;
+    }
+
+    if (tick.processed === 0) break;
+  }
+
+  const remainingPending = await countDepositsToSweep();
+  const durationMs = Date.now() - started;
+
+  logSweepEvent("Sweeper drain finished", {
+    depositId: "—",
+    step: "drain_done",
+    durationMs,
+    amount: String(remainingPending),
+  });
+
+  return {
+    processed: totalProcessed,
+    completed: totalCompleted,
+    failed: totalFailed,
+    skipped: totalSkipped,
+    pendingFound: remainingPending,
+    gasFunded: totalGasFunded,
+    swept: totalSwept,
+    refunded: totalRefunded,
+    batchAddressesFunded: totalBatchFunded,
+    durationMs,
+    diagnostics,
+    results: allResults,
+    errors: allErrors,
+    rounds,
+    remainingPending,
+    drained: remainingPending === 0,
   };
 }

@@ -10,7 +10,7 @@ import {
 } from "@/deposits/blockchain/wallet-client";
 import { fundBnbUntilTarget, readAddressBalances } from "@/deposits/sweeper/address-sweep";
 import { waitForConfirmations } from "@/deposits/sweeper/confirmations";
-import { getMaxSweepRetries, getMinSweepUsdt, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { getMaxSweepRetries, getMinSweepUsdt, getBatchFundAddressLimit, SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
 /** Mark sub-minimum deposits completed without on-chain sweep. */
@@ -65,7 +65,7 @@ async function listPendingDepositIds(limit: number) {
 
 export { completeBelowMinDeposits };
 
-export async function fundGasForAllPendingAddresses(limit: number) {
+export async function fundGasForAllPendingAddresses(depositLimit?: number) {
   const receiving = getReceivingWallet();
   const treasury = getTreasuryAccount();
   const mismatch = getTreasuryAddressMismatch();
@@ -80,7 +80,8 @@ export async function fundGasForAllPendingAddresses(limit: number) {
     };
   }
 
-  const pending = await listPendingDepositIds(limit);
+  const fundLimit = depositLimit ?? getBatchFundAddressLimit();
+  const pending = await listPendingDepositIds(fundLimit);
   const publicClient = getBscPublicClient();
   const byAddress = new Map<
     string,

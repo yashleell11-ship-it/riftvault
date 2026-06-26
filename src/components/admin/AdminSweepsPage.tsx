@@ -52,6 +52,8 @@ type RunResult = {
   failed?: number;
   processed?: number;
   batchAddressesFunded?: number;
+  drained?: boolean;
+  remainingPending?: number;
 };
 
 type Deposit = {
@@ -84,6 +86,10 @@ function truncateHash(hash: string | null, len = 12) {
   if (!hash) return "—";
   if (hash.length <= len * 2) return hash;
   return `${hash.slice(0, len)}…${hash.slice(-6)}`;
+}
+
+function aggregatedDrained(result: RunResult) {
+  return Boolean(result.drained) || (result.remainingPending ?? result.pendingFound ?? 0) === 0;
 }
 
 function statusBadge(status: string | null, sweptAt: string | null, sweepTxHash: string | null) {
@@ -182,7 +188,7 @@ export function AdminSweepsPage() {
     setRunning(true);
     setRunResult(null);
     setTimerSec(60);
-    setRunProgress("Funding BNB on all addresses…");
+    setRunProgress("Sweeping all deposits to treasury…");
 
     await fetch("/api/admin/sweeps/reset-failed", { method: "POST" });
 
@@ -200,14 +206,14 @@ export function AdminSweepsPage() {
       failed: 0,
       processed: 0,
       batchAddressesFunded: 0,
+      drained: false,
+      remainingPending: 0,
     };
 
-    const maxRounds = 10;
+    const maxClientPasses = 5;
 
-    for (let round = 1; round <= maxRounds; round++) {
-      setRunProgress(
-        `Batch ${round}: fund all addresses + sweep queue… ${String(timerSec).padStart(2, "0")}s`
-      );
+    for (let pass = 1; pass <= maxClientPasses; pass++) {
+      setRunProgress(`Drain pass ${pass} — moving USDT to treasury…`);
 
       const res = await fetch("/api/admin/sweeps/run", { method: "POST" });
       const data = (await res.json()) as RunResult & {
@@ -215,9 +221,12 @@ export function AdminSweepsPage() {
         failed?: number;
         processed?: number;
         batchAddressesFunded?: number;
+        drained?: boolean;
+        remainingPending?: number;
+        rounds?: number;
       };
 
-      aggregated.rounds = round;
+      aggregated.rounds = (aggregated.rounds ?? 0) + (data.rounds ?? 1);
       aggregated.durationMs += data.durationMs ?? 0;
       aggregated.gasFunded += data.gasFunded ?? 0;
       aggregated.swept += data.swept ?? 0;
@@ -227,7 +236,9 @@ export function AdminSweepsPage() {
       aggregated.processed = (aggregated.processed ?? 0) + (data.processed ?? 0);
       aggregated.batchAddressesFunded =
         (aggregated.batchAddressesFunded ?? 0) + (data.batchAddressesFunded ?? 0);
-      aggregated.pendingFound = data.pendingFound ?? 0;
+      aggregated.remainingPending = data.remainingPending ?? 0;
+      aggregated.drained = Boolean(data.drained);
+      aggregated.pendingFound = data.remainingPending ?? 0;
       aggregated.results.push(...(data.results ?? []));
       aggregated.errors.push(...(data.errors ?? []));
       aggregated.ok = aggregated.ok && Boolean(data.ok);
@@ -235,7 +246,8 @@ export function AdminSweepsPage() {
 
       setRunResult({ ...aggregated });
 
-      if ((data.processed ?? 0) === 0) break;
+      if (data.drained || (data.remainingPending ?? 0) === 0) break;
+      if ((data.processed ?? 0) === 0 && (data.completed ?? 0) === 0) break;
     }
 
     setRunProgress(null);
@@ -271,7 +283,7 @@ export function AdminSweepsPage() {
           <Button size="sm" onClick={runSweepNow} disabled={running || loading}>
             {running
               ? `${runProgress ?? "Sweeping…"} (${String(timerSec).padStart(2, "0")}s)`
-              : "Run sweep now"}
+              : "Sweep all to treasury"}
           </Button>
         </div>
       </div>
@@ -326,16 +338,21 @@ export function AdminSweepsPage() {
       {runResult && (
         <Card className="mb-4 border-accent/30 bg-accent/5 text-sm px-4 py-3 space-y-1">
           <p className="font-medium">
-            Manual run {runResult.ok ? "succeeded" : "finished with errors"} (
-            {runResult.rounds ?? 1} deposit
-            {(runResult.rounds ?? 1) === 1 ? "" : "s"}, {runResult.durationMs}ms total)
+            {aggregatedDrained(runResult)
+              ? "All USDT consolidated to treasury"
+              : runResult.ok
+                ? "Sweep finished"
+                : "Sweep finished with errors"}{" "}
+            ({runResult.rounds ?? 1} server round
+            {(runResult.rounds ?? 1) === 1 ? "" : "s"}, {runResult.durationMs}ms)
           </p>
           <p className="text-xs text-text-muted">
-            completed={runResult.completed ?? 0} failed={runResult.failed ?? 0} gasFunded=
-            {runResult.gasFunded} swept={runResult.swept} refunded={runResult.refunded}
+            completed={runResult.completed ?? 0} failed={runResult.failed ?? 0} remaining=
+            {runResult.remainingPending ?? runResult.pendingFound ?? 0} gasFunded=
+            {runResult.gasFunded} swept={runResult.swept}
             {runResult.batchAddressesFunded != null &&
               runResult.batchAddressesFunded > 0 &&
-              ` · batch BNB→${runResult.batchAddressesFunded} addr`}
+              ` · BNB→${runResult.batchAddressesFunded} addr`}
           </p>
           {runResult.errors.map((e) => (
             <p key={e} className="text-xs text-red-400 font-mono">

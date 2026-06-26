@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { authorizeCronOrVercelCli } from "@/lib/cron-auth";
-import { runSweeperTick } from "@/deposits/sweeper/runner";
+import { runSweeperUntilDone } from "@/deposits/sweeper/runner";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +30,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await runSweeperTick({ includeDiagnostics: true });
+    const result = await runSweeperUntilDone({ includeDiagnostics: true });
 
     if (!result.errors.length && result.pendingFound === 0 && result.processed === 0) {
       return NextResponse.json({
