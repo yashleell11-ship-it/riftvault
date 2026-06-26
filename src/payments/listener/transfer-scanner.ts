@@ -58,6 +58,11 @@ export async function scanUsdtTransfers(options?: {
     await setListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID, fromBlock - 1n);
   }
 
+  const recentWindow = BigInt(process.env.PAYMENT_LISTENER_RECENT_BLOCKS ?? 25);
+  if (latestBlock > recentWindow && fromBlock < latestBlock - recentWindow) {
+    fromBlock = latestBlock - recentWindow;
+  }
+
   const maxBlocks = BigInt(options?.maxBlocks ?? 15);
   const toBlock =
     fromBlock + maxBlocks > latestBlock ? latestBlock : fromBlock + maxBlocks;
