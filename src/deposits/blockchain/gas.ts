@@ -72,12 +72,21 @@ export function gasFundingShortfall(balance: bigint, fundingTarget: bigint): big
   return balance >= fundingTarget ? 0n : fundingTarget - balance;
 }
 
-/** Sendable BNB after reserving gas for a native transfer. */
+/** Sendable BNB after reserving gas for a native transfer (use fundingTarget, not raw gasCost). */
 export function refundableBnbAmount(
   balance: bigint,
-  gasCost: bigint,
+  gasReserve: bigint,
   minRefundWei = 0n
 ): bigint {
-  const sendable = balance > gasCost ? balance - gasCost : 0n;
+  const sendable = balance > gasReserve ? balance - gasReserve : 0n;
   return sendable >= minRefundWei ? sendable : 0n;
+}
+
+/** True when the address can afford a native transfer of `value` plus gas. */
+export function canAffordNativeTransfer(
+  balance: bigint,
+  value: bigint,
+  gasReserve: bigint
+): boolean {
+  return balance >= value + gasReserve;
 }

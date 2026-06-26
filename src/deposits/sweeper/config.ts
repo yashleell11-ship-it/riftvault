@@ -55,3 +55,9 @@ export function getMaxGasFundingTxs(): number {
   const n = Number(process.env.SWEEPER_MAX_GAS_FUNDING_TXS ?? 5);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
+
+/** Minimum deposit amount (USDT) worth sweeping — below this is auto-completed, no on-chain tx. */
+export function getMinSweepUsdt(): number {
+  const n = Number(process.env.SWEEPER_MIN_USDT ?? 0.1);
+  return Number.isFinite(n) && n > 0 ? n : 0.1;
+}

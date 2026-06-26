@@ -1,10 +1,11 @@
-import { formatUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { getUsdtTokenAddress, USDT_DECIMALS } from "@/payments/blockchain/usdt-bep20";
 import { deriveDepositAccount } from "@/deposits/blockchain/derive-account";
 import {
+  canAffordNativeTransfer,
   estimateNativeTransferGas,
   estimateUsdtTransferGas,
   refundableBnbAmount,
@@ -30,6 +31,7 @@ import {
 import {
   getMaxSweepRetries,
   getMinBnbRefundWei,
+  getMinSweepUsdt,
   getSweepTxConfirmations,
   SWEEP_STATUS,
 } from "@/deposits/sweeper/config";
@@ -83,6 +85,28 @@ async function markFailed(depositId: string, error: string) {
       retryCount: { increment: 1 },
     },
   });
+}
+
+async function markSweepCompleted(
+  depositId: string,
+  sweptAt: Date | null,
+  extra?: { sweepTxHash?: string | null; gasFundingTxHash?: string | null; gasRefundTxHash?: string | null }
+) {
+  await prisma.cryptoDeposit.update({
+    where: { id: depositId },
+    data: {
+      sweepStatus: SWEEP_STATUS.COMPLETED,
+      sweepError: null,
+      sweptAt: sweptAt ?? new Date(),
+      ...(extra?.sweepTxHash ? { sweepTxHash: extra.sweepTxHash } : {}),
+      ...(extra?.gasFundingTxHash ? { gasFundingTxHash: extra.gasFundingTxHash } : {}),
+      ...(extra?.gasRefundTxHash ? { gasRefundTxHash: extra.gasRefundTxHash } : {}),
+    },
+  });
+}
+
+function minSweepUsdtWei(): bigint {
+  return parseUnits(String(getMinSweepUsdt()), USDT_DECIMALS);
 }
 
 /** Claim a deposit row for sweeping (row-level lock via status transition). */
@@ -182,6 +206,28 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       depositAddress: depositAccount.address,
     });
 
+    const minUsdt = minSweepUsdtWei();
+    if (deposit.amount < getMinSweepUsdt()) {
+      logSweepEvent("Deposit below minimum sweep amount — skipping", {
+        ...ctx,
+        step: "below_min_amount",
+        amount: String(deposit.amount),
+      });
+      await markSweepCompleted(depositId, deposit.sweptAt, {
+        sweepTxHash: deposit.sweepTxHash,
+        gasFundingTxHash: deposit.gasFundingTxHash,
+        gasRefundTxHash: deposit.gasRefundTxHash,
+      });
+      return {
+        depositId,
+        status: SWEEP_STATUS.COMPLETED,
+        skipped: true,
+        sweepTxHash: deposit.sweepTxHash,
+        gasFundingTxHash: deposit.gasFundingTxHash,
+        gasRefundTxHash: deposit.gasRefundTxHash,
+      };
+    }
+
     const publicClient = getBscPublicClient();
     const waitForConfirmations = (txHash: `0x${string}`, required: number) =>
       waitForTxConfirmations(publicClient, txHash, required);
@@ -214,28 +260,43 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           await waitForConfirmations(sweepTxHash, getSweepTxConfirmations());
         }
 
-        await prisma.cryptoDeposit.update({
-          where: { id: depositId },
-          data: {
-            sweepTxHash,
-            sweepStatus: SWEEP_STATUS.SWEPT,
-            sweptAt: deposit.sweptAt ?? new Date(),
-            sweepError: null,
-          },
-        });
         ctx.sweepTxHash = sweepTxHash;
-        logSweepEvent("Address has no USDT — sweep already done on-chain", {
+        logSweepEvent("Address has no USDT — sweep done, completing (no dust refund)", {
           ...ctx,
           step: "already_swept_on_chain",
           sweepTxHash,
         });
-      } else {
-        logSweepEvent("Address has no USDT and no sweep tx — skipping transfer", {
-          ...ctx,
-          step: "address_empty",
+
+        await markSweepCompleted(depositId, deposit.sweptAt ?? new Date(), {
+          sweepTxHash,
+          gasFundingTxHash: deposit.gasFundingTxHash,
         });
+
+        return {
+          depositId,
+          status: SWEEP_STATUS.COMPLETED,
+          sweepTxHash,
+          gasFundingTxHash: deposit.gasFundingTxHash,
+          gasRefundTxHash: deposit.gasRefundTxHash,
+        };
       }
-    } else {
+
+      logSweepEvent("Address empty — nothing to sweep", { ...ctx, step: "address_empty" });
+      await markSweepCompleted(depositId, deposit.sweptAt);
+      return { depositId, status: SWEEP_STATUS.COMPLETED, skipped: true };
+    }
+
+    if (balances.usdt < minUsdt) {
+      logSweepEvent("On-chain USDT below minimum — skipping sweep", {
+        ...ctx,
+        step: "below_min_on_chain",
+        amount: formatUnits(balances.usdt, USDT_DECIMALS),
+      });
+      await markSweepCompleted(depositId, deposit.sweptAt);
+      return { depositId, status: SWEEP_STATUS.COMPLETED, skipped: true };
+    }
+
+    {
     // ── Phase 1: Gas funding (balance-first, multiple txs if needed) ────
 
     if (balances.usdt > 0n) {
@@ -403,37 +464,30 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       });
       logSweepEvent("USDT sweep confirmed", { ...ctx, step: "sweep_confirmed" });
     }
-    } // end balances.usdt > 0 (gas + sweep)
+    } // end usdt sweep block
 
-    // ── Phase 3: BNB refund ───────────────────────────────────────────────
+    // ── Phase 3: BNB refund (only when worth it — never chase dust) ───────
     let gasRefundTxHash = deposit.gasRefundTxHash as `0x${string}` | null;
     balances = await readAddressBalances(publicClient, depositAddress);
 
     if (!gasRefundTxHash) {
-      const { gasCost, fundingTarget: refundGasTarget } =
-        await estimateNativeTransferGas(publicClient);
+      const { fundingTarget: refundGasReserve } = await estimateNativeTransferGas(publicClient);
       let refundAmount = refundableBnbAmount(
         balances.bnb,
-        gasCost,
+        refundGasReserve,
         getMinBnbRefundWei()
       );
 
-      if (refundAmount > 0n && balances.bnb < refundGasTarget) {
-        await fundBnbUntilTarget({
-          publicClient,
-          treasury,
-          depositAddress,
-          targetWei: refundGasTarget,
-          ctx,
-          stepPrefix: "refund_gas",
-          waitForConfirmations,
+      if (
+        refundAmount > 0n &&
+        !canAffordNativeTransfer(balances.bnb, refundAmount, refundGasReserve)
+      ) {
+        logSweepEvent("BNB refund skipped — balance too low for safe transfer", {
+          ...ctx,
+          step: "refund_skip_unaffordable",
+          gasSent: formatUnits(balances.bnb, 18),
         });
-        balances = await readAddressBalances(publicClient, depositAddress);
-        refundAmount = refundableBnbAmount(
-          balances.bnb,
-          gasCost,
-          getMinBnbRefundWei()
-        );
+        refundAmount = 0n;
       }
 
       if (refundAmount > 0n) {
@@ -480,14 +534,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       await waitForConfirmations(gasRefundTxHash, 1);
     }
 
-    await prisma.cryptoDeposit.update({
-      where: { id: depositId },
-      data: {
-        sweepStatus: SWEEP_STATUS.COMPLETED,
-        sweepError: null,
-        sweptAt: deposit.sweptAt ?? new Date(),
-      },
-    });
+    await markSweepCompleted(depositId, deposit.sweptAt ?? new Date());
 
     const durationMs = Date.now() - started;
     logSweepEvent("Sweep completed", { ...ctx, step: "completed", durationMs });

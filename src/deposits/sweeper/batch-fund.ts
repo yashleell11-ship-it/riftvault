@@ -1,7 +1,8 @@
-import { formatUnits } from "viem";
+import { formatUnits, parseUnits } from "viem";
 import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
+import { USDT_DECIMALS } from "@/payments/blockchain/usdt-bep20";
 import { estimateUsdtTransferGas } from "@/deposits/blockchain/gas";
 import {
   getTreasuryAccount,
@@ -9,15 +10,42 @@ import {
 } from "@/deposits/blockchain/wallet-client";
 import { fundBnbUntilTarget, readAddressBalances } from "@/deposits/sweeper/address-sweep";
 import { waitForConfirmations } from "@/deposits/sweeper/confirmations";
-import { getMaxSweepRetries, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { getMaxSweepRetries, getMinSweepUsdt, SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
+
+/** Mark sub-minimum deposits completed without on-chain sweep. */
+async function completeBelowMinDeposits() {
+  const minUsdt = getMinSweepUsdt();
+  const updated = await prisma.cryptoDeposit.updateMany({
+    where: {
+      status: "confirmed",
+      walletTxId: { not: null },
+      amount: { lt: minUsdt },
+      NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
+    },
+    data: {
+      sweepStatus: SWEEP_STATUS.COMPLETED,
+      sweepError: null,
+    },
+  });
+  if (updated.count > 0) {
+    logSweepEvent("Auto-completed below-minimum deposits", {
+      depositId: "—",
+      step: "below_min_auto_complete",
+      amount: String(updated.count),
+    });
+  }
+  return updated.count;
+}
 
 async function listPendingDepositIds(limit: number) {
   const maxRetries = getMaxSweepRetries();
+  const minUsdt = getMinSweepUsdt();
   return prisma.cryptoDeposit.findMany({
     where: {
       status: "confirmed",
       walletTxId: { not: null },
+      amount: { gte: minUsdt },
       NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
       OR: [
         { sweepStatus: null },
@@ -35,7 +63,8 @@ async function listPendingDepositIds(limit: number) {
   });
 }
 
-/** Fund BNB gas on every unique pending deposit address that still holds USDT. */
+export { completeBelowMinDeposits };
+
 export async function fundGasForAllPendingAddresses(limit: number) {
   const receiving = getReceivingWallet();
   const treasury = getTreasuryAccount();
@@ -76,6 +105,17 @@ export async function fundGasForAllPendingAddresses(limit: number) {
   for (const { address, depositIds } of byAddress.values()) {
     const balances = await readAddressBalances(publicClient, address);
     if (balances.usdt === 0n) continue;
+
+    const minUsdtWei = parseUnits(String(getMinSweepUsdt()), USDT_DECIMALS);
+    if (balances.usdt < minUsdtWei) {
+      logSweepEvent("Batch fund skipped — USDT below minimum", {
+        depositId: depositIds[0] ?? "—",
+        step: "batch_fund_below_min",
+        depositAddress: address,
+        amount: formatUnits(balances.usdt, 18),
+      });
+      continue;
+    }
 
     const gasEstimate = await estimateUsdtTransferGas(
       publicClient,

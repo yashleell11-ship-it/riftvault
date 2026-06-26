@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
-import { getMaxSweepsPerTick, getMaxSweepRetries, SWEEP_STATUS } from "@/deposits/sweeper/config";
+import { getMaxSweepsPerTick, getMaxSweepRetries, getMinSweepUsdt, SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
-import { fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
+import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
@@ -40,6 +40,7 @@ export async function resetStaleSweepFailures() {
         { sweepError: { contains: "insufficient funds for gas" } },
         { sweepError: { contains: "Insufficient BNB" } },
         { sweepError: { contains: "BNB balance too low" } },
+        { sweepError: { contains: "insufficient funds for gas * price + value" } },
         { sweepError: { contains: "Timed out while waiting" } },
         { sweepError: { contains: "Confirmation pending" } },
         { sweepTxHash: { not: null } },
@@ -69,11 +70,13 @@ export const resetStaleSendTransactionFailures = resetStaleSweepFailures;
 /** Find confirmed, credited deposits that still need on-chain consolidation. */
 export async function findDepositsToSweep(limit: number) {
   const maxRetries = getMaxSweepRetries();
+  const minUsdt = getMinSweepUsdt();
 
   return prisma.cryptoDeposit.findMany({
     where: {
       status: "confirmed",
       walletTxId: { not: null },
+      amount: { gte: minUsdt },
       NOT: { sweepStatus: SWEEP_STATUS.COMPLETED },
       OR: [
         { sweepStatus: null },
@@ -132,6 +135,7 @@ export async function runSweeperTick(options?: {
   });
 
   await resetStaleSweepFailures();
+  await completeBelowMinDeposits();
 
   const limit = options?.limit ?? getMaxSweepsPerTick();
   let batchAddressesFunded = 0;
