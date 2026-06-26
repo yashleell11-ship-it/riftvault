@@ -19,6 +19,7 @@ import { processDetectedTransfer } from "@/payments/listener/payment-matcher";
 import type { ScannedTransfer } from "@/payments/listener/transfer-scanner";
 import { recordDepositTransfer } from "@/deposits/listener/record-deposit";
 import { getAddressOwnerMap } from "@/deposits/services/provision-addresses";
+import { getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 import { uniqueDepositAddressesEnabled } from "@/lib/env";
 
 export type UnifiedScanOptions = {
@@ -244,5 +245,58 @@ export async function scanUsdtTransfersUnified(
     latestBlock,
     fromBlock,
     toBlock,
+  };
+}
+
+/**
+ * Rescan a single tx by receipt (works for archive blocks — no eth_getLogs range needed).
+ */
+export async function rescanUsdtTransactionByHash(txHash: `0x${string}`): Promise<{
+  matched: number;
+  depositMatched: number;
+  blockNumber: bigint;
+  latestBlock: bigint;
+  transfersProcessed: number;
+  skippedUnknownRecipient: number;
+}> {
+  const client = getBscPublicClient();
+  const token = getUsdtTokenAddress().toLowerCase();
+  const receipt = await client.getTransactionReceipt({ hash: txHash });
+  const latestBlock = await client.getBlockNumber();
+
+  const { depositOwners, receiving } = await buildWatchAddresses();
+
+  let matched = 0;
+  let depositMatched = 0;
+  let transfersProcessed = 0;
+  let skippedUnknownRecipient = 0;
+
+  for (const log of receipt.logs) {
+    if (log.address.toLowerCase() !== token) continue;
+
+    const transfer = decodeTransferLog(log);
+    if (!transfer) continue;
+    transfersProcessed += 1;
+
+    const result = await processTransfer(transfer, receiving, depositOwners);
+    if (result.checkout) matched += 1;
+    if (result.deposit) depositMatched += 1;
+
+    if (
+      !result.checkout &&
+      !result.deposit &&
+      !(receiving && addressesEqual(transfer.toAddress, receiving))
+    ) {
+      skippedUnknownRecipient += 1;
+    }
+  }
+
+  return {
+    matched,
+    depositMatched,
+    blockNumber: receipt.blockNumber,
+    latestBlock,
+    transfersProcessed,
+    skippedUnknownRecipient,
   };
 }

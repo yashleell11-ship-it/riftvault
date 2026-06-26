@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { authorizeCronOrVercelCli } from "@/lib/cron-auth";
-import { rescanUsdtBlockRange } from "@/payments/listener/runner";
+import { rescanUsdtBlockRange, rescanUsdtTransaction } from "@/payments/listener/runner";
 import { updateDepositConfirmations } from "@/deposits/services/confirm-deposit";
 import { updatePaymentConfirmations } from "@/payments/listener/transfer-scanner";
 import { prisma } from "@/lib/db";
@@ -9,14 +9,18 @@ import { prisma } from "@/lib/db";
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
 
-const bodySchema = z.object({
-  fromBlock: z.number().int().nonnegative(),
-  toBlock: z.number().int().nonnegative(),
-  txHash: z
-    .string()
-    .regex(/^0x[a-fA-F0-9]{64}$/)
-    .optional(),
-});
+const bodySchema = z
+  .object({
+    fromBlock: z.number().int().nonnegative().optional(),
+    toBlock: z.number().int().nonnegative().optional(),
+    txHash: z
+      .string()
+      .regex(/^0x[a-fA-F0-9]{64}$/)
+      .optional(),
+  })
+  .refine((d) => d.txHash || (d.fromBlock !== undefined && d.toBlock !== undefined), {
+    message: "Provide txHash or both fromBlock and toBlock",
+  });
 
 const MAX_BLOCK_SPAN = 500;
 
@@ -45,18 +49,38 @@ export async function POST(request: Request) {
   }
 
   const { fromBlock, toBlock, txHash } = parsed.data;
-  if (toBlock < fromBlock) {
-    return NextResponse.json({ error: "toBlock must be >= fromBlock" }, { status: 400 });
-  }
-  if (toBlock - fromBlock > MAX_BLOCK_SPAN) {
-    return NextResponse.json(
-      { error: `Block span cannot exceed ${MAX_BLOCK_SPAN}` },
-      { status: 400 }
-    );
+
+  if (!txHash) {
+    if (toBlock! < fromBlock!) {
+      return NextResponse.json({ error: "toBlock must be >= fromBlock" }, { status: 400 });
+    }
+    if (toBlock! - fromBlock! > MAX_BLOCK_SPAN) {
+      return NextResponse.json(
+        { error: `Block span cannot exceed ${MAX_BLOCK_SPAN}` },
+        { status: 400 }
+      );
+    }
   }
 
   try {
-    const result = await rescanUsdtBlockRange(BigInt(fromBlock), BigInt(toBlock));
+    let result;
+    if (txHash) {
+      const txResult = await rescanUsdtTransaction(txHash as `0x${string}`);
+      result = {
+        scanned: 1,
+        matched: txResult.matched,
+        depositMatched: txResult.depositMatched,
+        latestBlock: txResult.latestBlock,
+        fromBlock: txResult.blockNumber,
+        toBlock: txResult.blockNumber,
+        transfersProcessed: txResult.transfersProcessed,
+        skippedUnknownRecipient: txResult.skippedUnknownRecipient,
+      };
+    } else {
+      const range = await rescanUsdtBlockRange(BigInt(fromBlock!), BigInt(toBlock!));
+      result = { ...range, transfersProcessed: null, skippedUnknownRecipient: null };
+    }
+
     await updatePaymentConfirmations();
     await updateDepositConfirmations();
 
@@ -85,13 +109,15 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       ok: true,
-      fromBlock,
-      toBlock,
+      fromBlock: txHash ? Number(result.fromBlock) : fromBlock,
+      toBlock: txHash ? Number(result.toBlock) : toBlock,
       scanned: result.scanned,
       checkoutMatched: result.matched,
       depositMatched: result.depositMatched,
       latestBlock: result.latestBlock.toString(),
       txHash: txHash ?? null,
+      transfersProcessed: result.transfersProcessed,
+      skippedUnknownRecipient: result.skippedUnknownRecipient,
       depositsForTx: depositRows,
     });
   } catch (error) {

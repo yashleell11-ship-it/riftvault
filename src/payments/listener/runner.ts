@@ -2,6 +2,7 @@ import { expireStalePaymentOrders } from "@/payments/services/expire-orders.serv
 import { updatePaymentConfirmations } from "@/payments/listener/transfer-scanner";
 import {
   scanUsdtTransfersUnified,
+  rescanUsdtTransactionByHash,
   type UnifiedScanOptions,
 } from "@/payments/listener/unified-scanner";
 import { updateDepositConfirmations } from "@/deposits/services/confirm-deposit";
@@ -36,4 +37,8 @@ export async function rescanUsdtBlockRange(fromBlock: bigint, toBlock: bigint) {
     toBlock,
     advanceCursor: false,
   });
+}
+
+export async function rescanUsdtTransaction(txHash: `0x${string}`) {
+  return rescanUsdtTransactionByHash(txHash);
 }

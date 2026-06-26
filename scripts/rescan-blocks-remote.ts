@@ -39,8 +39,15 @@ function parseArgs() {
     } else if (arg === "--tx" && args[i + 1]) txHash = args[++i];
   }
 
+  if (txHash) {
+    return { fromBlock: 0, toBlock: 0, txHash };
+  }
+
   if (fromBlock == null || toBlock == null || !Number.isFinite(fromBlock) || !Number.isFinite(toBlock)) {
-    console.error("Usage: npm run payments:rescan:remote -- --block <n> [--tx <hash>]");
+    console.error(
+      "Usage: npm run payments:rescan:remote -- --tx <hash>\n" +
+        "       npm run payments:rescan:remote -- --block <n> [--tx <hash>]"
+    );
     process.exit(1);
   }
 
@@ -52,8 +59,13 @@ async function main() {
   const appUrl = resolveAppUrl();
   const { fromBlock, toBlock, txHash } = parseArgs();
 
+  const body = txHash
+    ? { txHash }
+    : { fromBlock, toBlock, txHash };
+
   console.log(`[rescan:remote] POST ${appUrl}/api/cron/rescan-usdt-payments`);
-  console.log(`[rescan:remote] blocks ${fromBlock}–${toBlock}`);
+  if (txHash) console.log(`[rescan:remote] tx ${txHash}`);
+  else console.log(`[rescan:remote] blocks ${fromBlock}–${toBlock}`);
 
   const res = await fetch(`${appUrl}/api/cron/rescan-usdt-payments`, {
     method: "POST",
@@ -61,7 +73,7 @@ async function main() {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fromBlock, toBlock, txHash }),
+    body: JSON.stringify(body),
     signal: AbortSignal.timeout(90_000),
   });
 
