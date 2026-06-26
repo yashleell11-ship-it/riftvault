@@ -6,7 +6,7 @@
     },
     {
       "path": "/api/cron/scan-usdt-payments",
-      "schedule": "*/5 * * * *"
+      "schedule": "30 0 * * *"
     }
   ]
 }
