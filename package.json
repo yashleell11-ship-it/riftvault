@@ -18,7 +18,8 @@
     "payments:listen:local": "tsx scripts/payment-listener.ts",
     "payments:rescan": "tsx scripts/rescan-blocks.ts",
     "payments:rescan:remote": "tsx scripts/rescan-blocks-remote.ts",
-    "payments:sweep": "tsx scripts/sweep-deposits.ts"
+    "payments:sweep": "tsx scripts/sweep-deposits.ts",
+    "trustwallet:decrypt": "tsx scripts/decrypt-trustwallet-key.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
