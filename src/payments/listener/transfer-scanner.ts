@@ -2,7 +2,6 @@ import type { Log } from "viem";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import {
   getReceivingWallet,
-  getUsdtContractAddress,
   PAYMENT_LISTENER_STATE_ID,
 } from "@/payments/blockchain/config";
 import { ERC20_TRANSFER_EVENT, getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
@@ -57,7 +56,7 @@ export async function scanUsdtTransfers(options?: {
 
   const cursor = await getListenerCursor(prisma, PAYMENT_LISTENER_STATE_ID);
   const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 2_000);
-  let fromBlock =
+  const fromBlock =
     cursor?.lastBlock != null
       ? cursor.lastBlock + 1n
       : latestBlock > lookback

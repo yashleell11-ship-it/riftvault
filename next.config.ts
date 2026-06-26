@@ -14,7 +14,12 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "picsum.photos" },
       { protocol: "https", hostname: "ipfs.io" },
       { protocol: "https", hostname: "**.ipfs.dweb.link" },
+      { protocol: "https", hostname: "gateway.pinata.cloud" },
+      { protocol: "https", hostname: "**.mypinata.cloud" },
     ],
+  },
+  experimental: {
+    optimizePackageImports: ["lucide-react"],
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

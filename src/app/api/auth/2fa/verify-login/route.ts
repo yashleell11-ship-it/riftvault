@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { createSession, setSessionCookie } from "@/lib/auth";
 import { verifyTotpCode } from "@/lib/totp";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
 const schema = z.object({
   challengeToken: z.string().min(1),
@@ -19,6 +20,10 @@ export async function POST(request: Request) {
 
     const { challengeToken, code } = parsed.data;
 
+    if (!(await rateLimitAuth(request, "verify_2fa", challengeToken))) {
+      return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
+    }
+
     const token = await prisma.verificationToken.findUnique({
       where: { token: challengeToken },
       include: { user: true },
@@ -30,6 +35,11 @@ export async function POST(request: Request) {
       token.expiresAt < new Date()
     ) {
       return NextResponse.json({ error: "Challenge expired" }, { status: 401 });
+    }
+
+    if (token.user.frozen) {
+      await prisma.verificationToken.delete({ where: { id: token.id } });
+      return NextResponse.json({ error: "Account is frozen" }, { status: 403 });
     }
 
     if (!token.user.totpEnabled || !token.user.totpSecret) {

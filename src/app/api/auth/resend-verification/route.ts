@@ -2,11 +2,16 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { issueVerificationEmail } from "@/lib/email-verification";
 import { EmailDeliveryError } from "@/lib/email";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
-export async function POST() {
+export async function POST(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (!(await rateLimitAuth(request, "resend_verification", user.id))) {
+    return NextResponse.json({ error: "Too many requests. Try again later." }, { status: 429 });
   }
 
   if (user.emailVerified) {

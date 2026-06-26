@@ -35,6 +35,7 @@ export async function getWithdrawnToday(
       userId,
       currency,
       type: "withdraw",
+      status: { in: ["pending", "completed"] },
       createdAt: { gte: start },
     },
     select: { amount: true },

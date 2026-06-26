@@ -3,6 +3,17 @@ import { getDefaultCurrency, normalizeCurrency } from "@/lib/currency";
 
 type Tx = Prisma.TransactionClient;
 
+function isPostgres(): boolean {
+  const url = process.env.DATABASE_URL ?? "";
+  return url.startsWith("postgres://") || url.startsWith("postgresql://");
+}
+
+/** Serialize balance reads/writes per user+currency (prevents double-spend races). */
+async function acquireWalletLock(tx: Tx, userId: string, currency: string) {
+  if (!isPostgres()) return;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}), hashtext(${currency}))`;
+}
+
 export const WALLET_TX_TYPES = [
   "deposit",
   "withdraw",
@@ -55,6 +66,7 @@ export async function creditWallet(
   }
 ) {
   const currency = normalizeCurrency(params.currency);
+  await acquireWalletLock(tx, params.userId, currency);
   const current = await getWalletBalance(tx, params.userId, currency);
   const balanceAfter = Math.round((current + params.amount) * 10000) / 10000;
 
@@ -85,6 +97,7 @@ export async function debitWallet(
   }
 ) {
   const currency = normalizeCurrency(params.currency ?? getDefaultCurrency());
+  await acquireWalletLock(tx, params.userId, currency);
   const current = await getWalletBalance(tx, params.userId, currency);
 
   if (current < params.amount) {

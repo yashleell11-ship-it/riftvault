@@ -13,6 +13,21 @@ import {
   logPaymentTransaction,
 } from "@/payments/database/payment-repository";
 
+async function allocateUniquePaymentAmount(listPrice: number) {
+  for (let attempt = 0; attempt < 15; attempt++) {
+    const built = buildUniquePaymentAmount(listPrice);
+    const clash = await prisma.usdtPaymentOrder.findFirst({
+      where: {
+        expectedAmountRaw: built.amountRaw,
+        status: { in: ["pending", "detecting", "confirming"] },
+      },
+      select: { id: true },
+    });
+    if (!clash) return built;
+  }
+  throw new Error("Could not allocate unique payment amount — try again");
+}
+
 export async function createUsdtPaymentOrder(params: {
   userId: string;
   nftId: string;
@@ -36,7 +51,7 @@ export async function createUsdtPaymentOrder(params: {
     throw new Error("You cannot buy your own listing");
   }
 
-  const { displayAmount, amountRaw } = buildUniquePaymentAmount(nft.listing.price);
+  const { displayAmount, amountRaw } = await allocateUniquePaymentAmount(nft.listing.price);
   const expiresAt = new Date(Date.now() + getPaymentExpiryMinutes() * 60_000);
 
   const order = await prisma.$transaction(async (tx) => {

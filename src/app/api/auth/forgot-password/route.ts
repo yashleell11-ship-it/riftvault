@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { generateToken } from "@/lib/auth";
 import { sendPasswordResetEmail } from "@/lib/email";
 import { forgotPasswordSchema } from "@/lib/validations";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -14,6 +15,13 @@ export async function POST(request: Request) {
         { error: parsed.error.issues[0]?.message ?? "Invalid input" },
         { status: 400 }
       );
+    }
+
+    if (!(await rateLimitAuth(request, "forgot_password", parsed.data.email))) {
+      return NextResponse.json({
+        success: true,
+        message: "If that email is registered, you will receive a reset link shortly.",
+      });
     }
 
     const user = await prisma.user.findUnique({

@@ -58,6 +58,19 @@ export async function POST(request: Request) {
     }
 
     const order = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.listing.updateMany({
+        where: {
+          id: nft.listing!.id,
+          status: "active",
+          nft: { id: nftId, status: "listed" },
+        },
+        data: { status: "sold" },
+      });
+
+      if (claimed.count === 0) {
+        throw new Error("NOT_FOR_SALE");
+      }
+
       const created = await tx.order.create({
         data: {
           nftId,
@@ -78,11 +91,6 @@ export async function POST(request: Request) {
         nftName: nft.name,
       });
 
-      await tx.listing.update({
-        where: { id: nft.listing!.id },
-        data: { status: "sold" },
-      });
-
       await tx.nft.update({
         where: { id: nftId },
         data: {
@@ -98,6 +106,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, order });
   } catch (error) {
+    if (error instanceof Error && error.message === "NOT_FOR_SALE") {
+      return NextResponse.json({ error: "This artifact is not for sale" }, { status: 409 });
+    }
     if (error instanceof Error && error.message === "Insufficient balance") {
       return NextResponse.json({ error: "Insufficient wallet balance" }, { status: 400 });
     }

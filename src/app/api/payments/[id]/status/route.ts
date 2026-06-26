@@ -5,6 +5,9 @@ import {
   toStatusPayload,
 } from "@/payments/services/payment-order.service";
 import { runPaymentListenerTick } from "@/payments/listener/runner";
+import { shouldRunThrottledScan } from "@/lib/scan-throttle";
+
+const PAYMENT_SCAN_INTERVAL_MS = 12_000;
 
 export async function GET(
   _request: Request,
@@ -17,11 +20,12 @@ export async function GET(
 
   const { id } = await params;
 
-  // Trigger a lightweight scan while the client polls (serverless-friendly).
-  try {
-    await runPaymentListenerTick({ paymentOrderId: id, maxBlocks: 100 });
-  } catch (error) {
-    console.error("[payments/status] listener tick:", error);
+  if (shouldRunThrottledScan(`payment:${id}`, PAYMENT_SCAN_INTERVAL_MS)) {
+    try {
+      await runPaymentListenerTick({ paymentOrderId: id, maxBlocks: 100 });
+    } catch (error) {
+      console.error("[payments/status] listener tick:", error);
+    }
   }
 
   const order = await getPaymentOrderStatus(id, user.id);

@@ -22,7 +22,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     include: { user: { select: { email: true } } },
   });
 
-  if (!deposit || deposit.status !== "pending") {
+  if (!deposit || !["pending", "detecting", "confirming"].includes(deposit.status)) {
+    return NextResponse.json({ error: "Not found or already processed" }, { status: 404 });
+  }
+
+  if (deposit.walletTxId && deposit.status === "confirmed") {
     return NextResponse.json({ error: "Not found or already processed" }, { status: 404 });
   }
 
@@ -52,6 +56,21 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
 
   const updated = await prisma.$transaction(async (db) => {
+    const claimed = await db.cryptoDeposit.updateMany({
+      where: {
+        id,
+        walletTxId: null,
+        status: { in: ["pending", "detecting", "confirming"] },
+      },
+      data: { status: "confirming" },
+    });
+
+    if (claimed.count === 0) {
+      const current = await db.cryptoDeposit.findUnique({ where: { id } });
+      if (current?.status === "confirmed" || current?.walletTxId) return current;
+      throw new Error("ALREADY_PROCESSED");
+    }
+
     const walletTx = await creditWallet(db, {
       userId: deposit.userId,
       amount: deposit.amount,
@@ -66,7 +85,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       where: { id },
       data: { status: "confirmed", walletTxId: walletTx.id },
     });
+  }).catch((error) => {
+    if (error instanceof Error && error.message === "ALREADY_PROCESSED") return null;
+    throw error;
   });
+
+  if (!updated) {
+    return NextResponse.json({ error: "Not found or already processed" }, { status: 404 });
+  }
 
   await createNotification(prisma, {
     userId: deposit.userId,

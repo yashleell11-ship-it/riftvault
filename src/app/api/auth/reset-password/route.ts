@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { hashPassword } from "@/lib/auth";
 import { resetPasswordSchema } from "@/lib/validations";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -13,6 +14,10 @@ export async function POST(request: Request) {
         { error: parsed.error.issues[0]?.message ?? "Invalid input" },
         { status: 400 }
       );
+    }
+
+    if (!(await rateLimitAuth(request, "reset_password"))) {
+      return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
     }
 
     const { token, password } = parsed.data;

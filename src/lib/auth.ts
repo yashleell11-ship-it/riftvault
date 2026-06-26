@@ -34,6 +34,10 @@ export async function deleteSession(token: string) {
   await prisma.session.deleteMany({ where: { token } });
 }
 
+export async function invalidateUserSessions(userId: string) {
+  await prisma.session.deleteMany({ where: { userId } });
+}
+
 export async function getSessionUser() {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE)?.value;
@@ -63,6 +67,11 @@ export async function getSessionUser() {
 
   if (!session || session.expiresAt < new Date()) {
     if (session) await prisma.session.delete({ where: { id: session.id } });
+    return null;
+  }
+
+  if (session.user.frozen) {
+    await prisma.session.delete({ where: { id: session.id } });
     return null;
   }
 

@@ -25,6 +25,10 @@ export async function DELETE(_request: Request, { params }: Params) {
     return NextResponse.json({ error: "Not your listing" }, { status: 403 });
   }
 
+  if (listing.status !== "active") {
+    return NextResponse.json({ error: "Only active listings can be cancelled" }, { status: 409 });
+  }
+
   await prisma.$transaction([
     prisma.listing.update({
       where: { id },

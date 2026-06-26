@@ -54,7 +54,7 @@ export async function scanUserDepositTransfers(options?: { maxBlocks?: number })
 
   const cursor = await getListenerCursor(prisma, DEPOSIT_LISTENER_STATE_ID);
   const lookback = BigInt(process.env.PAYMENT_LISTENER_LOOKBACK_BLOCKS ?? 2_000);
-  let fromBlock =
+  const fromBlock =
     cursor?.lastBlock != null
       ? cursor.lastBlock + 1n
       : latestBlock > lookback

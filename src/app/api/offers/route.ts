@@ -23,7 +23,11 @@ export async function POST(req: Request) {
   const { nftId, amount, currency, expiresInHours } = parsed.data;
   const nft = await prisma.nft.findUnique({ where: { id: nftId }, include: { owner: { select: { id: true, email: true } } } });
   if (!nft) return NextResponse.json({ error: "NFT not found" }, { status: 404 });
+  if (!nft.ownerId) return NextResponse.json({ error: "NFT has no owner" }, { status: 400 });
   if (nft.ownerId === user.id) return NextResponse.json({ error: "Cannot offer on your own NFT" }, { status: 400 });
+  if (nft.status !== "listed" && nft.status !== "auction") {
+    return NextResponse.json({ error: "This NFT is not accepting offers" }, { status: 400 });
+  }
 
   const expiresAt = new Date(Date.now() + expiresInHours * 3600 * 1000);
   const offer = await prisma.offer.create({ data: { nftId, buyerId: user.id, amount, currency, expiresAt, status: "pending" } });
@@ -44,6 +48,12 @@ export async function GET(req: Request) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { searchParams } = new URL(req.url);
   const nftId = searchParams.get("nftId");
+  if (nftId) {
+    const nft = await prisma.nft.findUnique({ where: { id: nftId }, select: { ownerId: true } });
+    if (!nft || nft.ownerId !== user.id) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
   const offers = await prisma.offer.findMany({
     where: { ...(nftId ? { nftId } : { buyerId: user.id }), status: "pending" },
     include: { buyer: { select: { id: true, displayName: true } }, nft: { select: { id: true, name: true, imageUrl: true } } },

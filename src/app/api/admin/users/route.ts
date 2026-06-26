@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { requireAdmin } from "@/lib/auth";
+import { requireAdmin, invalidateUserSessions } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { logAudit } from "@/lib/audit";
 
@@ -30,6 +30,10 @@ export async function PATCH(req: Request) {
   if (!parsed.success) return NextResponse.json({ error: "Invalid input" }, { status: 400 });
   if (id === admin.id) return NextResponse.json({ error: "Cannot modify your own account" }, { status: 400 });
   const user = await prisma.user.update({ where: { id }, data: parsed.data });
+
+  if (parsed.data.frozen === true) {
+    await invalidateUserSessions(id);
+  }
 
   await logAudit({
     actorId: admin.id,

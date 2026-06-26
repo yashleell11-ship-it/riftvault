@@ -40,14 +40,32 @@ export async function POST(req: Request) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message }, { status: 400 });
 
   const { nftId, startPrice, reservePrice, currency, durationHours } = parsed.data;
-  const nft = await prisma.nft.findUnique({ where: { id: nftId, ownerId: user.id } });
+  const nft = await prisma.nft.findUnique({
+    where: { id: nftId, ownerId: user.id },
+    include: { listing: true },
+  });
   if (!nft) return NextResponse.json({ error: "NFT not found or not owned by you" }, { status: 404 });
+
+  if (nft.status !== "reserved" && nft.status !== "listed") {
+    return NextResponse.json({ error: "NFT must be reserved or listed to auction" }, { status: 400 });
+  }
 
   const existing = await prisma.auction.findUnique({ where: { nftId } });
   if (existing) return NextResponse.json({ error: "Auction already exists for this NFT" }, { status: 400 });
 
   const endAt = new Date(Date.now() + durationHours * 3600 * 1000);
-  const auction = await prisma.auction.create({ data: { nftId, sellerId: user.id, startPrice, reservePrice, currency, endAt, status: "active" } });
-  await prisma.nft.update({ where: { id: nftId }, data: { status: "auction" } });
+  const auction = await prisma.$transaction(async (tx) => {
+    if (nft.listing?.status === "active") {
+      await tx.listing.update({
+        where: { id: nft.listing.id },
+        data: { status: "cancelled" },
+      });
+    }
+    const created = await tx.auction.create({
+      data: { nftId, sellerId: user.id, startPrice, reservePrice, currency, endAt, status: "active" },
+    });
+    await tx.nft.update({ where: { id: nftId }, data: { status: "auction" } });
+    return created;
+  });
   return NextResponse.json({ auction }, { status: 201 });
 }

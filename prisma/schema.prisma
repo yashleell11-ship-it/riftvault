@@ -160,6 +160,9 @@ model Order {
   status          String   @default("completed")
   createdAt DateTime @default(now())
   earnings  Earning[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
 }
 
 model Earning {

@@ -9,6 +9,7 @@ import { NftCard } from "@/components/explore/NftCard";
 import { NftActions } from "@/components/explore/NftActions";
 import { AuctionSection } from "@/components/explore/AuctionSection";
 import { MakeOfferTrigger } from "@/components/explore/MakeOfferTrigger";
+import { OwnerOffersPanel } from "@/components/explore/OwnerOffersPanel";
 import { formatPrice, getDefaultCurrency } from "@/lib/currency";
 import { rarityColor } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -133,6 +134,10 @@ export default async function NftDetailPage({ params }: Params) {
             <div className="mb-8">
               <MakeOfferTrigger nftId={nft.id} nftName={nft.name} />
             </div>
+          )}
+
+          {isOwner && (nft.status === "listed" || nft.status === "auction") && (
+            <OwnerOffersPanel nftId={nft.id} />
           )}
 
           <div className="grid grid-cols-2 gap-4 text-sm">

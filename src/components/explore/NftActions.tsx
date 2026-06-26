@@ -6,7 +6,7 @@ import { useConnection, useWriteContract, useWaitForTransactionReceipt } from "w
 import { parseEther } from "viem";
 import { Button } from "@/components/ui/Button";
 import { ConnectButton } from "@/components/web3/ConnectButton";
-import { formatPrice } from "@/lib/currency";
+import { formatPrice, normalizeCurrency } from "@/lib/currency";
 import {
   RIFT_VAULT_MARKETPLACE_ABI,
   ethToWei,
@@ -197,7 +197,7 @@ export function NftActions({
     }
 
     const canOnChain = chainEnabled && chainListingId && currency === "ETH";
-    const canUsdt = usdtEnabled && currency === "USDT";
+    const canUsdt = usdtEnabled && normalizeCurrency(currency ?? "") === "USDT";
 
     return (
       <div className="w-full space-y-3">
@@ -239,6 +239,14 @@ export function NftActions({
           <p className="text-xs text-text-muted">Waiting for on-chain confirmation…</p>
         )}
       </div>
+    );
+  }
+
+  if (status === "available" && isOwner) {
+    return (
+      <Button href="/dashboard/nfts" size="lg" className="w-full">
+        List for sale in dashboard
+      </Button>
     );
   }
 

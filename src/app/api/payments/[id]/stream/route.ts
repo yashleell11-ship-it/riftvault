@@ -26,7 +26,7 @@ export async function GET(
       };
 
       let closed = false;
-      const maxTicks = 120;
+      const maxTicks = 60;
       let tick = 0;
 
       while (!closed && tick < maxTicks) {
@@ -47,7 +47,7 @@ export async function GET(
           send({ error: "listener_error" });
         }
 
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((r) => setTimeout(r, 4000));
       }
 
       controller.close();

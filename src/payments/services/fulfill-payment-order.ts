@@ -55,6 +55,19 @@ export async function fulfillPaymentOrder(paymentOrderId: string) {
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    const claimed = await tx.listing.updateMany({
+      where: {
+        id: nft.listing!.id,
+        status: "active",
+        nft: { id: paymentOrder.nftId, status: "listed" },
+      },
+      data: { status: "sold" },
+    });
+
+    if (claimed.count === 0) {
+      throw new Error("Listing no longer available");
+    }
+
     const marketplaceOrder = await tx.order.create({
       data: {
         nftId: paymentOrder.nftId,
@@ -66,11 +79,6 @@ export async function fulfillPaymentOrder(paymentOrderId: string) {
         txHash: paymentOrder.txHash!,
         status: "completed",
       },
-    });
-
-    await tx.listing.update({
-      where: { id: nft.listing!.id },
-      data: { status: "sold" },
     });
 
     await tx.nft.update({

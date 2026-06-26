@@ -2,6 +2,11 @@ import { prisma } from "@/lib/db";
 import { DEPOSIT_ROUTES } from "@/deposits/blockchain/config";
 import { deriveDepositAddress } from "@/deposits/blockchain/derive-address";
 
+const ADDRESS_MAP_TTL_MS = 30_000;
+let cachedAddressMap: Map<string, { userId: string; chainKey: string; asset: string }> | null =
+  null;
+let cachedAddressMapAt = 0;
+
 async function nextDerivationIndex(): Promise<number> {
   const agg = await prisma.userDepositAddress.aggregate({
     _max: { derivationIndex: true },
@@ -40,6 +45,7 @@ export async function ensureUserDepositAddresses(userId: string) {
     });
 
     created.push(row);
+    cachedAddressMap = null;
   }
 
   return prisma.userDepositAddress.findMany({
@@ -51,6 +57,11 @@ export async function ensureUserDepositAddresses(userId: string) {
 export async function getAddressOwnerMap(): Promise<
   Map<string, { userId: string; chainKey: string; asset: string }>
 > {
+  const now = Date.now();
+  if (cachedAddressMap && now - cachedAddressMapAt < ADDRESS_MAP_TTL_MS) {
+    return cachedAddressMap;
+  }
+
   const rows = await prisma.userDepositAddress.findMany({
     select: { address: true, userId: true, chainKey: true, asset: true },
   });
@@ -63,5 +74,8 @@ export async function getAddressOwnerMap(): Promise<
       asset: row.asset,
     });
   }
+
+  cachedAddressMap = map;
+  cachedAddressMapAt = now;
   return map;
 }

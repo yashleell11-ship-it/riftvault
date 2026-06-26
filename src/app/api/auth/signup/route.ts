@@ -8,6 +8,7 @@ import {
 import { issueVerificationEmail } from "@/lib/email-verification";
 import { EmailDeliveryError } from "@/lib/email";
 import { signupSchema } from "@/lib/validations";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -19,6 +20,10 @@ export async function POST(request: Request) {
         { error: parsed.error.issues[0]?.message ?? "Invalid input" },
         { status: 400 }
       );
+    }
+
+    if (!(await rateLimitAuth(request, "signup"))) {
+      return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
     }
 
     const { displayName, email, password, referralCode } = parsed.data;

@@ -7,7 +7,7 @@ export async function GET() {
   if (!admin) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const deposits = await prisma.cryptoDeposit.findMany({
-    where: { status: "pending" },
+    where: { status: { in: ["pending", "detecting", "confirming"] } },
     orderBy: { createdAt: "asc" },
     include: {
       user: {

@@ -8,14 +8,24 @@ import {
 import { allowDemoDeposits, uniqueDepositAddressesEnabled } from "@/lib/env";
 import { ensureUserDepositAddresses } from "@/deposits/services/provision-addresses";
 import { scanUserDepositTransfers } from "@/deposits/listener/deposit-scanner";
+import { shouldRunThrottledScan } from "@/lib/scan-throttle";
 
-export async function GET() {
+const SCAN_INTERVAL_MS = 45_000;
+
+export async function GET(request: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (uniqueDepositAddressesEnabled()) {
+  const { searchParams } = new URL(request.url);
+  const scanRequested = searchParams.get("scan") === "1";
+
+  if (
+    uniqueDepositAddressesEnabled() &&
+    scanRequested &&
+    shouldRunThrottledScan(`deposit:${user.id}`, SCAN_INTERVAL_MS)
+  ) {
     try {
       await scanUserDepositTransfers({ maxBlocks: 80 });
     } catch (error) {

@@ -7,6 +7,7 @@ import {
   generateToken,
 } from "@/lib/auth";
 import { loginSchema } from "@/lib/validations";
+import { rateLimitAuth } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -21,6 +22,10 @@ export async function POST(request: Request) {
     }
 
     const { email, password } = parsed.data;
+
+    if (!(await rateLimitAuth(request, "login", email))) {
+      return NextResponse.json({ error: "Too many attempts. Try again later." }, { status: 429 });
+    }
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !(await verifyPassword(password, user.passwordHash))) {

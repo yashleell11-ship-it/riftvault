@@ -113,16 +113,21 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
   const [submitting, setSubmitting] = useState<"demo" | "report" | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    const res = await fetch("/api/wallet/deposit-info");
+  const load = useCallback(async (withScan = false) => {
+    const url = withScan ? "/api/wallet/deposit-info?scan=1" : "/api/wallet/deposit-info";
+    const res = await fetch(url);
     if (res.ok) setInfo(await res.json());
     setLoading(false);
   }, []);
 
   useEffect(() => {
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
+    load(true);
+    const statusPoll = setInterval(() => load(false), 10_000);
+    const scanPoll = setInterval(() => load(true), 60_000);
+    return () => {
+      clearInterval(statusPoll);
+      clearInterval(scanPoll);
+    };
   }, [load]);
 
   async function handleDemoDeposit(e: React.FormEvent) {
@@ -142,7 +147,7 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
     if (res.ok) {
       setDepositAmount("");
       onSuccess("Demo deposit credited to your ledger.");
-      load();
+      load(true);
     } else {
       onError(data.error ?? "Deposit failed");
     }
@@ -171,7 +176,7 @@ export function DepositPanel({ currency, onSuccess, onError }: Props) {
       setReportAmount("");
       setReportTxHash("");
       onSuccess(data.message ?? "Deposit reported for review.");
-      load();
+      load(true);
     } else {
       onError(data.error ?? "Could not report deposit");
     }

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { getCachedCollectionOptions } from "@/lib/collections-cache";
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -63,10 +64,7 @@ export async function GET(request: Request) {
       take: limit,
     }),
     prisma.nft.count({ where }),
-    prisma.collection.findMany({
-      select: { name: true, slug: true },
-      orderBy: { name: "asc" },
-    }),
+    getCachedCollectionOptions(),
   ]);
 
   return NextResponse.json({
