@@ -24,7 +24,7 @@ export async function readAddressBalances(
   return { bnb, usdt };
 }
 
-/** Prior sweep tx at the same deposit address (sibling deposit row). */
+/** Prior sweep tx at the same deposit address (any sibling or completed row). */
 export async function findPriorSweepTxAtAddress(
   depositAddress: string,
   excludeDepositId: string
@@ -36,7 +36,7 @@ export async function findPriorSweepTxAtAddress(
       sweepTxHash: { not: null },
       status: "confirmed",
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ sweptAt: "desc" }, { updatedAt: "desc" }],
     select: { sweepTxHash: true },
   });
   return (prior?.sweepTxHash as `0x${string}` | null) ?? null;

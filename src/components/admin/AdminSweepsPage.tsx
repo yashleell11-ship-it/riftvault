@@ -140,6 +140,7 @@ export function AdminSweepsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    await fetch("/api/admin/sweeps/reconcile", { method: "POST" }).catch(() => null);
     const [statsRes, listRes] = await Promise.all([
       fetch("/api/admin/sweeps/stats"),
       fetch(`/api/admin/sweeps?filter=${filter}`),
@@ -190,6 +191,7 @@ export function AdminSweepsPage() {
     setTimerSec(60);
     setRunProgress("Sweeping all deposits to treasury…");
 
+    await fetch("/api/admin/sweeps/reconcile", { method: "POST" });
     await fetch("/api/admin/sweeps/reset-failed", { method: "POST" });
 
     const aggregated: RunResult = {

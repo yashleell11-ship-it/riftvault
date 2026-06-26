@@ -10,6 +10,7 @@ import {
 } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { completeBelowMinDeposits, fundGasForAllPendingAddresses } from "@/deposits/sweeper/batch-fund";
+import { reconcileSiblingDepositsAtEmptyAddresses } from "@/deposits/sweeper/reconcile";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
 
@@ -197,6 +198,7 @@ export async function runSweeperTick(options?: {
 
   await resetStaleSweepFailures();
   await completeBelowMinDeposits();
+  await reconcileSiblingDepositsAtEmptyAddresses();
 
   const limit = options?.limit ?? getMaxSweepsPerTick();
   let batchAddressesFunded = 0;
@@ -303,6 +305,7 @@ export async function runSweeperUntilDone(options?: {
   await resetAllSweepFailures();
   await resetStaleSweepFailures();
   await completeBelowMinDeposits();
+  await reconcileSiblingDepositsAtEmptyAddresses();
 
   let rounds = 0;
   let totalCompleted = 0;
