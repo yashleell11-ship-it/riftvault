@@ -37,7 +37,13 @@ export async function GET(request: Request) {
 
   try {
     const result = await runPaymentListenerTick({ maxBlocks: 15, skipDeposits: true });
-    return NextResponse.json({ ok: true, ...result, scanned: result.scanned });
+    return NextResponse.json({
+      ok: true,
+      scanned: result.scanned,
+      matched: result.matched,
+      depositMatched: result.depositMatched,
+      latestBlock: result.latestBlock.toString(),
+    });
   } catch (error) {
     const details = serializeError(error);
     console.error("[cron/scan-usdt-payments]", error);
