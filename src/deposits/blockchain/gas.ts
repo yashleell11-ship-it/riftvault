@@ -2,28 +2,80 @@ import type { PublicClient } from "viem";
 import { getUsdtTokenAddress } from "@/payments/blockchain/usdt-bep20";
 import { ERC20_TRANSFER_ABI } from "@/deposits/blockchain/erc20";
 
+/**
+ * Deterministic gas planning for the treasury sweeper.
+ *
+ * The cardinal rule: the SAME pinned (gasLimit, gasPrice) pair is used to
+ * (a) compute how much BNB to fund a deposit wallet with and (b) sign the
+ * actual sweep transaction. Because BSC charges legacy gas at exactly the
+ * gasPrice you set (and never more than gasLimit units), pinning both values
+ * makes the maximum on-chain cost provably bounded:
+ *
+ *     actualCost = gasUsed * gasPrice  <=  gasLimit * gasPrice = maxTxCost
+ *
+ * As long as we fund `fundingTarget >= maxTxCost`, the wallet can NEVER be
+ * underfunded — regardless of gas-price drift or EIP-1559 fee inflation
+ * between estimation and broadcast. This is the root-cause fix for the
+ * "funded slightly less than required" production bug.
+ */
+
 const NATIVE_TRANSFER_GAS = 21_000n;
-const GAS_SAFETY_NUM = 12n;
-const GAS_SAFETY_DEN = 10n;
-/** Minimum extra BNB added on top of estimated gas (0.00002 BNB). */
-export const MIN_GAS_FUNDING_BUFFER_WEI = 20_000_000_000_000n;
 const USDT_TRANSFER_GAS_FALLBACK = 100_000n;
 
+/** Gas-limit safety margin applied to the raw estimate (1.20x). */
+const GAS_LIMIT_MARGIN_NUM = 12n;
+const GAS_LIMIT_MARGIN_DEN = 10n;
+
+/** Gas-price safety margin applied to the network price (1.30x — per spec). */
+const GAS_PRICE_MARGIN_NUM = 13n;
+const GAS_PRICE_MARGIN_DEN = 10n;
+
+/** Floor on the network gas price so a near-zero RPC reading never strands a tx. */
+const MIN_GAS_PRICE_WEI = 1_000_000_000n; // 1 gwei (BSC effective minimum)
+
+/** Minimum BNB a deposit wallet must hold before sweeping (0.00002 BNB). */
+export const MIN_GAS_FUNDING_BUFFER_WEI = 20_000_000_000_000n;
+
 export type GasEstimate = {
+  /** Pinned gas limit for the actual tx (raw estimate * margin). */
   gasLimit: bigint;
+  /** Pinned legacy gas price for the actual tx (network price * margin). */
   gasPrice: bigint;
-  /** Raw estimate: gasLimit * gasPrice */
+  /** Hard upper bound on tx cost at the pinned params: gasLimit * gasPrice. */
   gasCost: bigint;
-  /** Amount the deposit address should hold before sweeping USDT */
+  /** BNB the deposit wallet must hold before sweeping: max(gasCost, MIN_BUFFER). */
   fundingTarget: bigint;
+  /** Raw network gas price before margin (diagnostics only). */
+  rawGasPrice: bigint;
+  /** Raw gas-limit estimate before margin (diagnostics only). */
+  rawGasLimit: bigint;
 };
 
-function applyFundingMargin(gasCost: bigint): bigint {
-  const withMargin = (gasCost * GAS_SAFETY_NUM) / GAS_SAFETY_DEN;
-  return withMargin + MIN_GAS_FUNDING_BUFFER_WEI;
+function applyMargin(value: bigint, num: bigint, den: bigint): bigint {
+  return (value * num) / den;
 }
 
-/** Gas required for one BEP20 USDT transfer from `from` to `to`. */
+function maxBig(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
+}
+
+/** Latest network gas price, floored at a sane minimum and margin-padded for pinning. */
+export async function getPinnedGasPrice(client: PublicClient): Promise<{
+  rawGasPrice: bigint;
+  gasPrice: bigint;
+}> {
+  const network = await client.getGasPrice();
+  const rawGasPrice = maxBig(network, MIN_GAS_PRICE_WEI);
+  const gasPrice = applyMargin(rawGasPrice, GAS_PRICE_MARGIN_NUM, GAS_PRICE_MARGIN_DEN);
+  return { rawGasPrice, gasPrice };
+}
+
+/**
+ * Plan gas for one BEP20 USDT transfer from `from` to `to`.
+ *
+ * Returns pinned (gasLimit, gasPrice) that MUST be passed verbatim to the
+ * actual sweep transaction so the funded amount provably covers the cost.
+ */
 export async function estimateUsdtTransferGas(
   client: PublicClient,
   from: `0x${string}`,
@@ -31,11 +83,11 @@ export async function estimateUsdtTransferGas(
   amount: bigint
 ): Promise<GasEstimate> {
   const token = getUsdtTokenAddress();
-  const gasPrice = await client.getGasPrice();
+  const { rawGasPrice, gasPrice } = await getPinnedGasPrice(client);
 
-  let gasLimit: bigint;
+  let rawGasLimit: bigint;
   try {
-    gasLimit = await client.estimateContractGas({
+    rawGasLimit = await client.estimateContractGas({
       address: token,
       abi: ERC20_TRANSFER_ABI,
       functionName: "transfer",
@@ -43,27 +95,41 @@ export async function estimateUsdtTransferGas(
       account: from,
     });
   } catch {
-    gasLimit = USDT_TRANSFER_GAS_FALLBACK;
+    rawGasLimit = USDT_TRANSFER_GAS_FALLBACK;
   }
 
-  const gasCost = gasLimit * gasPrice;
-  const fundingTarget = applyFundingMargin(gasCost);
+  // Never trust an estimate below the known floor for an ERC20 transfer.
+  if (rawGasLimit < USDT_TRANSFER_GAS_FALLBACK) {
+    rawGasLimit = USDT_TRANSFER_GAS_FALLBACK;
+  }
 
-  return { gasLimit, gasPrice, gasCost, fundingTarget };
+  const gasLimit = applyMargin(rawGasLimit, GAS_LIMIT_MARGIN_NUM, GAS_LIMIT_MARGIN_DEN);
+  const gasCost = gasLimit * gasPrice;
+  const fundingTarget = maxBig(gasCost, MIN_GAS_FUNDING_BUFFER_WEI);
+
+  return { gasLimit, gasPrice, gasCost, fundingTarget, rawGasPrice, rawGasLimit };
 }
 
-/** Gas cost for one native BNB transfer (refund sweep). */
+/**
+ * Plan gas for one native BNB transfer (the refund of leftover gas).
+ *
+ * `gasCost`/`fundingTarget` here is the exact reserve to withhold so the
+ * refund tx itself is affordable — NOT floored at MIN_GAS_FUNDING_BUFFER_WEI,
+ * otherwise that buffer would be permanently stranded at the deposit address.
+ */
 export async function estimateNativeTransferGas(
   client: PublicClient
 ): Promise<GasEstimate> {
-  const gasPrice = await client.getGasPrice();
+  const { rawGasPrice, gasPrice } = await getPinnedGasPrice(client);
   const gasLimit = NATIVE_TRANSFER_GAS;
   const gasCost = gasLimit * gasPrice;
   return {
     gasLimit,
     gasPrice,
     gasCost,
-    fundingTarget: applyFundingMargin(gasCost),
+    fundingTarget: gasCost,
+    rawGasPrice,
+    rawGasLimit: NATIVE_TRANSFER_GAS,
   };
 }
 

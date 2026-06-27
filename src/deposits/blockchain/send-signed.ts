@@ -37,6 +37,11 @@ function assertLocalSigningAccount(account: Account): LocalSigningAccount {
 /**
  * Sign with the LocalAccount private key and broadcast via eth_sendRawTransaction only.
  * Never calls eth_sendTransaction on the RPC.
+ *
+ * When `gasPrice` is supplied the transaction is forced to LEGACY pricing so the
+ * on-chain cost is provably `gasUsed * gasPrice` (never an inflated EIP-1559
+ * maxFeePerGas). The sweeper relies on this to guarantee a funded wallet can
+ * always afford the tx it was funded for. `nonce` may be pinned for replacement.
  */
 export async function sendSignedTransaction(
   account: Account,
@@ -45,6 +50,8 @@ export async function sendSignedTransaction(
     value?: bigint;
     data?: Hex;
     gas?: bigint;
+    gasPrice?: bigint;
+    nonce?: number;
   }
 ): Promise<Hash> {
   const signer = assertLocalSigningAccount(account);
@@ -58,6 +65,10 @@ export async function sendSignedTransaction(
     value: params.value ?? 0n,
     data: params.data,
     gas: params.gas,
+    ...(params.gasPrice !== undefined
+      ? { type: "legacy" as const, gasPrice: params.gasPrice }
+      : {}),
+    ...(params.nonce !== undefined ? { nonce: params.nonce } : {}),
   });
 
   const serializer = chain.serializers?.transaction;
@@ -71,7 +82,8 @@ export async function sendSignedErc20Transfer(
   account: Account,
   token: `0x${string}`,
   to: `0x${string}`,
-  amount: bigint
+  amount: bigint,
+  options?: { gas?: bigint; gasPrice?: bigint; nonce?: number }
 ): Promise<Hash> {
   const data = encodeFunctionData({
     abi: ERC20_TRANSFER_ABI,
@@ -79,5 +91,11 @@ export async function sendSignedErc20Transfer(
     args: [to, amount],
   });
 
-  return sendSignedTransaction(account, { to: token, data });
+  return sendSignedTransaction(account, {
+    to: token,
+    data,
+    gas: options?.gas,
+    gasPrice: options?.gasPrice,
+    nonce: options?.nonce,
+  });
 }
