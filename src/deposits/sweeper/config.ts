@@ -56,6 +56,12 @@ export function getMaxGasFundingTxs(): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5;
 }
 
+/** Max verify→top-up→retry rounds in ensureGasFunded before giving up (spec: 3). */
+export function getGasFundingMaxAttempts(): number {
+  const n = Number(process.env.SWEEPER_GAS_FUNDING_ATTEMPTS ?? 3);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
 /** Max unique addresses to batch-fund gas for per tick. */
 export function getBatchFundAddressLimit(): number {
   const n = Number(process.env.SWEEPER_BATCH_FUND_LIMIT ?? 100);
