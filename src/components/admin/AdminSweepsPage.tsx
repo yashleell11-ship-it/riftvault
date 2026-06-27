@@ -21,6 +21,13 @@ type Stats = {
     };
   };
   treasury: { bnb: string; usdt: string };
+  gasPreview?: {
+    rawGasPriceGwei: string;
+    pinnedGasPriceGwei: string;
+    perSweepFundingBnb: string;
+    estimatedQueueCostBnb: string;
+    treasuryCoversQueue: boolean;
+  } | null;
   counts: {
     pending: number;
     queueReady?: number;
@@ -357,6 +364,44 @@ export function AdminSweepsPage() {
             <p className="font-semibold text-accent">{stats.counts.completed}</p>
           </Card>
         </div>
+      )}
+
+      {stats?.gasPreview && (
+        <Card className="mb-6 px-4 py-3 text-xs">
+          <div className="flex items-center gap-2 text-text-muted mb-2">
+            <Fuel className="h-3.5 w-3.5" /> Live gas economics
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <p className="text-text-muted text-[10px]">Network gas</p>
+              <p className="font-semibold">{Number(stats.gasPreview.rawGasPriceGwei).toFixed(2)} gwei</p>
+            </div>
+            <div>
+              <p className="text-text-muted text-[10px]">Pinned gas (1.3x)</p>
+              <p className="font-semibold">{Number(stats.gasPreview.pinnedGasPriceGwei).toFixed(2)} gwei</p>
+            </div>
+            <div>
+              <p className="text-text-muted text-[10px]">Funding / sweep</p>
+              <p className="font-semibold">{Number(stats.gasPreview.perSweepFundingBnb).toFixed(6)} BNB</p>
+            </div>
+            <div>
+              <p className="text-text-muted text-[10px]">Est. queue cost</p>
+              <p
+                className={cn(
+                  "font-semibold",
+                  stats.gasPreview.treasuryCoversQueue ? "text-accent" : "text-red-400"
+                )}
+              >
+                {Number(stats.gasPreview.estimatedQueueCostBnb).toFixed(6)} BNB
+              </p>
+            </div>
+          </div>
+          {!stats.gasPreview.treasuryCoversQueue && (
+            <p className="mt-2 text-[11px] text-red-400">
+              Treasury BNB may not cover the full queue — top up the hot wallet before draining.
+            </p>
+          )}
+        </Card>
       )}
 
       {stats && !stats.enabled && (

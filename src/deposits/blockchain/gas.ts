@@ -133,6 +133,32 @@ export async function estimateNativeTransferGas(
   };
 }
 
+/**
+ * Representative per-sweep gas cost for admin previews — uses the live network
+ * price and the ERC20 gas floor (no specific from/to needed). Cheap: one RPC.
+ */
+export async function previewUsdtSweepCost(client: PublicClient): Promise<{
+  rawGasPriceGwei: string;
+  pinnedGasPriceWei: bigint;
+  gasLimit: bigint;
+  perSweepFundingWei: bigint;
+}> {
+  const { rawGasPrice, gasPrice } = await getPinnedGasPrice(client);
+  const gasLimit = applyMargin(
+    USDT_TRANSFER_GAS_FALLBACK,
+    GAS_LIMIT_MARGIN_NUM,
+    GAS_LIMIT_MARGIN_DEN
+  );
+  const gasCost = gasLimit * gasPrice;
+  const perSweepFundingWei = maxBig(gasCost, MIN_GAS_FUNDING_BUFFER_WEI);
+  return {
+    rawGasPriceGwei: (Number(rawGasPrice) / 1e9).toString(),
+    pinnedGasPriceWei: gasPrice,
+    gasLimit,
+    perSweepFundingWei,
+  };
+}
+
 /** BNB shortfall to reach the funding target from current balance. */
 export function gasFundingShortfall(balance: bigint, fundingTarget: bigint): bigint {
   return balance >= fundingTarget ? 0n : fundingTarget - balance;

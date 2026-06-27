@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
 import { readUsdtBalance } from "@/deposits/blockchain/erc20";
+import { previewUsdtSweepCost } from "@/deposits/blockchain/gas";
 import { SWEEP_STATUS } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics, verifyTreasuryWalletMatch } from "@/deposits/sweeper/diagnostics";
 import { countDepositsToSweep } from "@/deposits/sweeper/queue";
@@ -69,6 +70,30 @@ export async function GET() {
   const diagnostics = await getSweeperDiagnostics();
   const treasuryMatch = verifyTreasuryWalletMatch();
 
+  // Live gas economics so the operator can see funding cost vs treasury balance.
+  let gasPreview: {
+    rawGasPriceGwei: string;
+    pinnedGasPriceGwei: string;
+    perSweepFundingBnb: string;
+    estimatedQueueCostBnb: string;
+    treasuryCoversQueue: boolean;
+  } | null = null;
+  try {
+    const client = getBscPublicClient();
+    const preview = await previewUsdtSweepCost(client);
+    const perSweepBnb = Number(formatUnits(preview.perSweepFundingWei, 18));
+    const estimatedQueueCost = perSweepBnb * queueReady;
+    gasPreview = {
+      rawGasPriceGwei: preview.rawGasPriceGwei,
+      pinnedGasPriceGwei: formatUnits(preview.pinnedGasPriceWei, 9),
+      perSweepFundingBnb: perSweepBnb.toFixed(8),
+      estimatedQueueCostBnb: estimatedQueueCost.toFixed(8),
+      treasuryCoversQueue: Number(treasuryBnb) >= estimatedQueueCost,
+    };
+  } catch (error) {
+    console.error("[admin/sweeps/stats] gas preview failed:", error);
+  }
+
   return NextResponse.json({
     enabled: diagnostics.enabled,
     diagnostics,
@@ -76,6 +101,7 @@ export async function GET() {
     receivingWallet: receiving,
     treasury: { bnb: treasuryBnb, usdt: treasuryUsdt },
     counts: { pending, queueReady, completed, failed, gasFunded, refunded },
+    gasPreview,
     backfill,
     resetMiscompleted,
     reopened,
