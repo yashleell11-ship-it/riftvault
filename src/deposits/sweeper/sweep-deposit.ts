@@ -350,6 +350,14 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       logSweepEvent("Gas funded — wallet can afford sweep", {
         ...ctx,
         step: "gas_funding_complete",
+        treasury: treasury.address,
+        usdtAmount: formatUnits(balances.usdt, USDT_DECIMALS),
+        gasEstimate: plan.gasLimit.toString(),
+        gasPriceGwei: formatUnits(plan.gasPrice, 9),
+        fundingAmount: formatUnits(plan.fundingTarget, 18),
+        maxTxCost: formatUnits(plan.gasCost, 18),
+        balanceAfter: formatUnits(balances.bnb, 18),
+        retryCount: funded.fundingTxCount,
         gasSent: formatUnits(balances.bnb, 18),
         amount: formatUnits(plan.fundingTarget, 18),
       });

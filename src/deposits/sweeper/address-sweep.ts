@@ -142,6 +142,9 @@ export async function ensureGasFunded(options: {
   const maxAttempts = getGasFundingMaxAttempts();
   let firstFundingTxHash: `0x${string}` | null = null;
   let fundingTxCount = 0;
+  const balanceBefore = await options.publicClient.getBalance({
+    address: options.depositAddress,
+  });
 
   const planAndBalance = async (): Promise<{ plan: GasEstimate; balance: bigint }> => {
     const [balance, plan] = await Promise.all([
@@ -156,12 +159,26 @@ export async function ensureGasFunded(options: {
     return { plan, balance };
   };
 
+  /** Explicit, queryable diagnostics for one funding attempt (Phase 5). */
+  const planDiag = (plan: GasEstimate, balance: bigint, attempt: number) => ({
+    treasury: options.treasury.address,
+    usdtAmount: formatUnits(options.usdtAmount, 18),
+    gasEstimate: plan.gasLimit.toString(),
+    gasPriceGwei: formatUnits(plan.gasPrice, 9),
+    fundingAmount: formatUnits(plan.fundingTarget, 18),
+    maxTxCost: formatUnits(plan.gasCost, 18),
+    balanceBefore: formatUnits(balanceBefore, 18),
+    balanceAfter: formatUnits(balance, 18),
+    attempt,
+  });
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const { plan, balance } = await planAndBalance();
     const shortfall = gasFundingShortfall(balance, plan.fundingTarget);
 
     logSweepEvent("Gas funding balance check", {
       ...options.ctx,
+      ...planDiag(plan, balance, attempt),
       step: `gas_fund_check_${attempt}`,
       gasSent: formatUnits(balance, 18),
       amount: formatUnits(plan.fundingTarget, 18),
