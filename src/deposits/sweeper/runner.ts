@@ -21,6 +21,7 @@ import {
 import { reconcileSiblingDepositsAtEmptyAddresses } from "@/deposits/sweeper/reconcile";
 import { sweepSingleDeposit } from "@/deposits/sweeper/sweep-deposit";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
+import { SWEEPER_LOCK_KEY, withLock } from "@/lib/system-lock";
 
 export type SweeperTickResult = {
   processed: number;
@@ -49,6 +50,8 @@ export type SweeperDrainResult = SweeperTickResult & {
   rounds: number;
   remainingPending: number;
   drained: boolean;
+  /** True when another sweeper run already held the lock and this call was a no-op. */
+  lockSkipped?: boolean;
 };
 
 export { countDepositsToSweep, findDepositsToSweep, sweepQueueWhere };
@@ -257,8 +260,56 @@ export async function runSweeperTick(options?: {
   };
 }
 
-/** Loop sweeper ticks until queue empty or wall time exceeded. */
+/**
+ * Loop sweeper ticks until queue empty or wall time exceeded.
+ *
+ * Serialized by a global SystemLock so the cron and a manual admin run can
+ * never drain concurrently — concurrent drains would share the single treasury
+ * hot-wallet and collide on its nonce. If another run holds the lock this call
+ * is a no-op (`lockSkipped: true`).
+ */
 export async function runSweeperUntilDone(options?: {
+  batchLimit?: number;
+  maxWallMs?: number;
+  includeDiagnostics?: boolean;
+}): Promise<SweeperDrainResult> {
+  const maxWallMs = options?.maxWallMs ?? getSweepDrainMaxMs();
+  // Lease must outlive the whole drain; the heartbeat renews it meanwhile.
+  const lockTtlMs = maxWallMs + 60_000;
+
+  const outcome = await withLock(SWEEPER_LOCK_KEY, lockTtlMs, () =>
+    runSweeperDrainUnlocked({ ...options, maxWallMs })
+  );
+
+  if (!outcome.ran) {
+    logSweepEvent("Sweeper drain skipped — another run holds the lock", {
+      depositId: "—",
+      step: "drain_lock_skipped",
+    });
+    return {
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      pendingFound: 0,
+      gasFunded: 0,
+      swept: 0,
+      refunded: 0,
+      batchAddressesFunded: 0,
+      durationMs: 0,
+      results: [],
+      errors: [],
+      rounds: 0,
+      remainingPending: await countDepositsToSweep().catch(() => 0),
+      drained: false,
+      lockSkipped: true,
+    };
+  }
+
+  return outcome.result;
+}
+
+async function runSweeperDrainUnlocked(options?: {
   batchLimit?: number;
   maxWallMs?: number;
   includeDiagnostics?: boolean;

@@ -541,3 +541,14 @@ model AuditLog {
   @@index([createdAt])
   @@index([actorId])
 }
+
+// Portable cross-process mutex (SQLite dev + Postgres prod). A holder claims a
+// key by writing a unique `owner` token and an `expiresAt` lease; a stale lease
+// can be stolen so a crashed holder never deadlocks the system. Used to ensure
+// only one treasury sweeper run touches the shared hot-wallet nonce at a time.
+model SystemLock {
+  key        String   @id
+  owner      String
+  acquiredAt DateTime @default(now())
+  expiresAt  DateTime
+}
