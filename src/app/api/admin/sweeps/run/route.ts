@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
-import { runSweeperTick, runSweeperUntilDone } from "@/deposits/sweeper/runner";
+import { runSweeperTickGuarded, runSweeperUntilDone } from "@/deposits/sweeper/runner";
 import { getAdminSweepBatchLimit } from "@/deposits/sweeper/config";
 import { getSweeperDiagnostics } from "@/deposits/sweeper/diagnostics";
 import { logSweepEvent } from "@/deposits/sweeper/logger";
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const singleTick = searchParams.get("tick") === "1";
 
     const result = singleTick
-      ? await runSweeperTick({ limit: batchLimit, includeDiagnostics: true, batchFund: true })
+      ? await runSweeperTickGuarded({ limit: batchLimit, includeDiagnostics: true, batchFund: true })
       : await runSweeperUntilDone({ batchLimit, includeDiagnostics: true });
 
     const drained = "drained" in result ? result.drained : result.pendingFound === 0;

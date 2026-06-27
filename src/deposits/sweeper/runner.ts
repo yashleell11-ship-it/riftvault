@@ -261,6 +261,40 @@ export async function runSweeperTick(options?: {
 }
 
 /**
+ * Single locked tick — used by the admin "run one tick" path so it cannot race
+ * the cron drain on the treasury nonce. Returns lockSkipped when busy.
+ */
+export async function runSweeperTickGuarded(options?: {
+  limit?: number;
+  includeDiagnostics?: boolean;
+  batchFund?: boolean;
+}): Promise<SweeperTickResult & { lockSkipped?: boolean }> {
+  const lockTtlMs = getSweepDrainMaxMs() + 60_000;
+  const outcome = await withLock(SWEEPER_LOCK_KEY, lockTtlMs, () => runSweeperTick(options));
+  if (!outcome.ran) {
+    logSweepEvent("Sweeper tick skipped — another run holds the lock", {
+      depositId: "—",
+      step: "tick_lock_skipped",
+    });
+    return {
+      processed: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      pendingFound: 0,
+      gasFunded: 0,
+      swept: 0,
+      refunded: 0,
+      durationMs: 0,
+      results: [],
+      errors: [],
+      lockSkipped: true,
+    };
+  }
+  return outcome.result;
+}
+
+/**
  * Loop sweeper ticks until queue empty or wall time exceeded.
  *
  * Serialized by a global SystemLock so the cron and a manual admin run can
