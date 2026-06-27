@@ -24,6 +24,24 @@ export async function getConfirmations(
   return Number(latest - receipt.blockNumber + 1n);
 }
 
+/**
+ * Liveness of a previously-submitted tx.
+ *  - "mined":   has a receipt (success or revert).
+ *  - "pending": no receipt but still visible in the mempool.
+ *  - "dropped": neither mined nor in the mempool — safe to re-send, because a
+ *               dropped tx never advanced the sender's nonce, so a fresh send
+ *               reuses the same nonce and only one of them can ever mine.
+ */
+export async function getTxLiveness(
+  client: PublicClient,
+  txHash: `0x${string}`
+): Promise<"mined" | "pending" | "dropped"> {
+  const receipt = await client.getTransactionReceipt({ hash: txHash }).catch(() => null);
+  if (receipt) return "mined";
+  const tx = await client.getTransaction({ hash: txHash }).catch(() => null);
+  return tx ? "pending" : "dropped";
+}
+
 /** True when tx is mined successfully with enough confirmations. */
 export async function isTransactionConfirmed(
   client: PublicClient,

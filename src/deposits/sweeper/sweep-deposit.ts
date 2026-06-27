@@ -25,6 +25,7 @@ import {
 import { isBlankSweepStatus } from "@/deposits/sweeper/backfill";
 import { resolveDerivationIndexForDeposit } from "@/deposits/sweeper/derive-index";
 import {
+  getTxLiveness,
   isReceiptWaitTimeout,
   isTransactionConfirmed,
   waitForConfirmations as waitForTxConfirmations,
@@ -281,6 +282,28 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
       });
       await markSweepCompleted(depositId, deposit.sweptAt);
       return { depositId, status: SWEEP_STATUS.COMPLETED, skipped: true };
+    }
+
+    // ── Resume recovery: a prior sweep tx is recorded but USDT is still here ──
+    // The tx never moved the funds. If it was dropped from the mempool (e.g.
+    // under-priced during a gas spike), clear it so the funded re-send below
+    // runs. This is safe: a dropped tx never advanced the nonce, so the new
+    // send reuses the freed nonce and at most one of them can ever mine.
+    if (sweepTxHash) {
+      const liveness = await getTxLiveness(publicClient, sweepTxHash);
+      if (liveness === "dropped") {
+        logSweepEvent("Prior sweep tx dropped from mempool — re-sending", {
+          ...ctx,
+          step: "sweep_tx_dropped_resend",
+          sweepTxHash,
+        });
+        await prisma.cryptoDeposit.update({
+          where: { id: depositId },
+          data: { sweepTxHash: null, sweepStatus: SWEEP_STATUS.FUNDING_GAS },
+        });
+        sweepTxHash = null;
+        ctx.sweepTxHash = undefined;
+      }
     }
 
     {
