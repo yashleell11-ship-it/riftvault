@@ -1,4 +1,5 @@
-import { formatUnits, parseUnits } from "viem";
+import { formatUnits, parseUnits, type PublicClient } from "viem";
+import type { LocalAccount } from "viem/accounts";
 import { prisma } from "@/lib/db";
 import { getBscPublicClient } from "@/payments/blockchain/client";
 import { getReceivingWallet } from "@/payments/blockchain/config";
@@ -87,6 +88,96 @@ async function markSweepCompleted(
 
 function minSweepUsdtWei(): bigint {
   return parseUnits(String(getMinSweepUsdt()), USDT_DECIMALS);
+}
+
+/**
+ * Refund leftover gas BNB from a deposit address back to the treasury.
+ *
+ * Reused by both the normal post-sweep path and the resume path (where a deposit
+ * crashed after the USDT left but before the refund). Pinned gas price keeps the
+ * refund cost bounded by the reserve. Idempotent: the gasRefundTxHash=null claim
+ * ensures only one worker sends, and an existing refund tx is simply awaited.
+ * Best-effort — returns the refund hash or null; never throws on "nothing to do".
+ */
+async function refundLeftoverBnbToTreasury(params: {
+  publicClient: PublicClient;
+  depositAccount: LocalAccount;
+  depositAddress: `0x${string}`;
+  receiving: `0x${string}`;
+  depositId: string;
+  existingRefundTxHash: `0x${string}` | null;
+  ctx: Parameters<typeof logSweepEvent>[1];
+  waitForConfirmations: (txHash: `0x${string}`, required: number) => Promise<unknown>;
+}): Promise<`0x${string}` | null> {
+  if (params.existingRefundTxHash) {
+    await params.waitForConfirmations(params.existingRefundTxHash, 1);
+    return params.existingRefundTxHash;
+  }
+
+  const balances = await readAddressBalances(params.publicClient, params.depositAddress);
+  const refundPlan = await estimateNativeTransferGas(params.publicClient);
+  const refundGasReserve = refundPlan.fundingTarget;
+  let refundAmount = refundableBnbAmount(balances.bnb, refundGasReserve, getMinBnbRefundWei());
+
+  if (
+    refundAmount > 0n &&
+    !canAffordNativeTransfer(balances.bnb, refundAmount, refundGasReserve)
+  ) {
+    logSweepEvent("BNB refund skipped — balance too low for safe transfer", {
+      ...params.ctx,
+      step: "refund_skip_unaffordable",
+      gasSent: formatUnits(balances.bnb, 18),
+    });
+    refundAmount = 0n;
+  }
+
+  if (refundAmount <= 0n) {
+    logSweepEvent("BNB refund skipped (dust or gas-only)", {
+      ...params.ctx,
+      step: "refund_skip",
+    });
+    return null;
+  }
+
+  const refundClaim = await prisma.cryptoDeposit.updateMany({
+    where: { id: params.depositId, gasRefundTxHash: null },
+    data: { sweepStatus: SWEEP_STATUS.REFUNDING },
+  });
+  if (refundClaim.count === 0) {
+    const refreshed = await prisma.cryptoDeposit.findUnique({
+      where: { id: params.depositId },
+      select: { gasRefundTxHash: true },
+    });
+    return (refreshed?.gasRefundTxHash as `0x${string}` | null) ?? null;
+  }
+
+  logSweepEvent("BNB refund started", {
+    ...params.ctx,
+    step: "bnb_refund_started",
+    gasSent: formatUnits(refundAmount, 18),
+  });
+
+  const gasRefundTxHash = await sendSignedTransaction(params.depositAccount, {
+    to: params.receiving,
+    value: refundAmount,
+    gas: refundPlan.gasLimit,
+    gasPrice: refundPlan.gasPrice,
+  });
+
+  await prisma.cryptoDeposit.update({
+    where: { id: params.depositId },
+    data: { gasRefundTxHash },
+  });
+  params.ctx.gasRefundTxHash = gasRefundTxHash;
+  logSweepEvent("BNB refund tx submitted", {
+    ...params.ctx,
+    step: "bnb_refund_tx_hash",
+    gasRefundTxHash,
+  });
+
+  await params.waitForConfirmations(gasRefundTxHash, getSweepTxConfirmations());
+  logSweepEvent("BNB refund confirmed", { ...params.ctx, step: "refund_confirmed" });
+  return gasRefundTxHash;
 }
 
 /** Claim a deposit row for sweeping (row-level lock via status transition). */
@@ -249,15 +340,29 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
         }
 
         ctx.sweepTxHash = sweepTxHash;
-        logSweepEvent("Address has no USDT — sweep done, completing (no dust refund)", {
+        logSweepEvent("Address has no USDT — sweep done, recovering leftover gas", {
           ...ctx,
           step: "already_swept_on_chain",
           sweepTxHash,
         });
 
+        // The USDT left but we may have crashed before refunding the leftover
+        // gas BNB. Recover it now so funded gas is never stranded at the address.
+        const recoveredRefund = await refundLeftoverBnbToTreasury({
+          publicClient,
+          depositAccount,
+          depositAddress,
+          receiving,
+          depositId,
+          existingRefundTxHash: deposit.gasRefundTxHash as `0x${string}` | null,
+          ctx,
+          waitForConfirmations,
+        });
+
         await markSweepCompleted(depositId, deposit.sweptAt ?? new Date(), {
           sweepTxHash,
           gasFundingTxHash: deposit.gasFundingTxHash,
+          gasRefundTxHash: recoveredRefund,
         });
 
         return {
@@ -265,7 +370,7 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
           status: SWEEP_STATUS.COMPLETED,
           sweepTxHash,
           gasFundingTxHash: deposit.gasFundingTxHash,
-          gasRefundTxHash: deposit.gasRefundTxHash,
+          gasRefundTxHash: recoveredRefund ?? deposit.gasRefundTxHash,
         };
       }
 
@@ -420,75 +525,16 @@ export async function sweepSingleDeposit(depositId: string): Promise<SweepResult
     } // end usdt sweep block
 
     // ── Phase 3: BNB refund (only when worth it — never chase dust) ───────
-    let gasRefundTxHash = deposit.gasRefundTxHash as `0x${string}` | null;
-    balances = await readAddressBalances(publicClient, depositAddress);
-
-    if (!gasRefundTxHash) {
-      const refundPlan = await estimateNativeTransferGas(publicClient);
-      const refundGasReserve = refundPlan.fundingTarget;
-      let refundAmount = refundableBnbAmount(
-        balances.bnb,
-        refundGasReserve,
-        getMinBnbRefundWei()
-      );
-
-      if (
-        refundAmount > 0n &&
-        !canAffordNativeTransfer(balances.bnb, refundAmount, refundGasReserve)
-      ) {
-        logSweepEvent("BNB refund skipped — balance too low for safe transfer", {
-          ...ctx,
-          step: "refund_skip_unaffordable",
-          gasSent: formatUnits(balances.bnb, 18),
-        });
-        refundAmount = 0n;
-      }
-
-      if (refundAmount > 0n) {
-        const refundClaim = await prisma.cryptoDeposit.updateMany({
-          where: { id: depositId, gasRefundTxHash: null },
-          data: { sweepStatus: SWEEP_STATUS.REFUNDING },
-        });
-        if (refundClaim.count === 0) {
-          const refreshed = await prisma.cryptoDeposit.findUnique({
-            where: { id: depositId },
-            select: { gasRefundTxHash: true },
-          });
-          gasRefundTxHash = refreshed?.gasRefundTxHash as `0x${string}` | null;
-        } else {
-        logSweepEvent("BNB refund started", {
-          ...ctx,
-          step: "bnb_refund_started",
-          gasSent: formatUnits(refundAmount, 18),
-        });
-
-        gasRefundTxHash = await sendSignedTransaction(depositAccount, {
-          to: receiving,
-          value: refundAmount,
-          gas: refundPlan.gasLimit,
-          gasPrice: refundPlan.gasPrice,
-        });
-
-        await prisma.cryptoDeposit.update({
-          where: { id: depositId },
-          data: { gasRefundTxHash },
-        });
-        ctx.gasRefundTxHash = gasRefundTxHash;
-        logSweepEvent("BNB refund tx submitted", {
-          ...ctx,
-          step: "bnb_refund_tx_hash",
-          gasRefundTxHash,
-        });
-
-        await waitForConfirmations(gasRefundTxHash, getSweepTxConfirmations());
-        logSweepEvent("BNB refund confirmed", { ...ctx, step: "refund_confirmed" });
-        }
-      } else {
-        logSweepEvent("BNB refund skipped (dust or gas-only)", { ...ctx, step: "refund_skip" });
-      }
-    } else {
-      await waitForConfirmations(gasRefundTxHash, 1);
-    }
+    await refundLeftoverBnbToTreasury({
+      publicClient,
+      depositAccount,
+      depositAddress,
+      receiving,
+      depositId,
+      existingRefundTxHash: deposit.gasRefundTxHash as `0x${string}` | null,
+      ctx,
+      waitForConfirmations,
+    });
 
     await markSweepCompleted(depositId, deposit.sweptAt ?? new Date());
 
